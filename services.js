@@ -3,6 +3,8 @@ const puppeteer = require('puppeteer');
 
 
 const getArtistSongsDailyData = async (artistId) => {
+    try {
+        console.log('fecthing songs data')
     const browser = await puppeteer.launch({
     args: [
         "--disable-setuid-sandbox",
@@ -12,8 +14,6 @@ const getArtistSongsDailyData = async (artistId) => {
       ],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
 });
-    try {
-        console.log('fecthing songs data')
         const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
