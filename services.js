@@ -44,12 +44,11 @@ const getArtistSongsDailyData = async (artistId) => {
             }
             return null;
         });
+        await browser.close();
         return songsData;
     } catch (error) {
         console.error(error);
         return []
-    } finally {
-        await browser.close();
     }
 
 }
