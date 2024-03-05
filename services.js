@@ -3,7 +3,15 @@ const puppeteer = require('puppeteer');
 
 
 const getArtistSongsDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({ headless: "new" });
+    const browser = await puppeteer.launch({
+    args: [
+        "--disable-setuid-sandbox",
+        "--no-sandbox",
+        "--single-process",
+        "--no-zygote",
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+});
     try {
         console.log('fecthing songs data')
         const page = await browser.newPage();
