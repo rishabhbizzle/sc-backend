@@ -1,19 +1,31 @@
 require('dotenv').config();
 const puppeteer = require('puppeteer');
+const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
+const Album= require('./models/albumModel');
+const Song  = require('./models/songModel');
+const Artist = require('./models/artistModel');
+
+// Initialize the Spotify API client with client credentials
+
+const Spotify = SpotifyApi.withClientCredentials(
+    process.env.SPOTIFY_CLIENT_ID,
+    process.env.SPOTIFY_CLIENT_SECRET
+);
+
 
 
 const getArtistSongsDailyData = async (artistId) => {
     try {
         console.log('fecthing songs data')
-    const browser = await puppeteer.launch({
-    args: [
-        "--disable-setuid-sandbox",
-        "--no-sandbox",
-        "--single-process",
-        "--no-zygote",
-      ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
-});
+        const browser = await puppeteer.launch({
+            args: [
+                "--disable-setuid-sandbox",
+                "--no-sandbox",
+                "--single-process",
+                "--no-zygote",
+            ],
+            executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+        });
         const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
@@ -54,7 +66,15 @@ const getArtistSongsDailyData = async (artistId) => {
 }
 
 const getArtistAlbumsDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({ headless: "new" });
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
     try {
         const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_albums.html`;
@@ -101,7 +121,15 @@ const getArtistAlbumsDailyData = async (artistId) => {
 
 
 const getArtistOverallDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({ headless: "new" });
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
     try {
         const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
@@ -136,8 +164,113 @@ const getArtistOverallDailyData = async (artistId) => {
     }
 }
 
+
+const getArtistSpotifyApiData = async (id) => {
+    try {
+        const artist = await Spotify.artists.get(id)
+        return artist
+    } catch (error) {
+        console.error(error);
+        return null
+    }
+}
+
+const getArtistMostPopularSongs = async (id) => {
+    try {
+        const topTracks = await Spotify.artists.topTracks(id, "US");
+        return topTracks.tracks
+    } catch (error) {
+        console.error(error);
+        return []
+    }
+}
+
+
+const getAlbumData = async (id) => {
+    try {
+        console.log('fetching album data:', id)
+        const albumDetails = await Spotify.albums.get(id, "US")
+        let streamingData = await Album.findOne({ spotifyId: id })
+        return { albumDetails, streamingData }
+    } catch (error) {
+        console.error(error);
+        return { albumDetails: null, streamingData: null }
+    }
+}
+
+const getTrackData = async (id) => {
+    try {
+        console.log('fetching track data:', id)
+        const trackDetails = await Spotify.tracks.get(id, "US")
+        let streamingData = await Song.findOne({ spotifyId: id })
+        return { trackDetails, streamingData }
+    } catch (error) {
+        console.error(error);
+        return { trackDetails: null, streamingData: null }
+    }
+}
+
+const getNewReleases = async () => {
+    try {
+        let newReleases = await Spotify.browse.getNewReleases("US", 10)
+        return newReleases
+    } catch (error) {
+        console.error(error);
+        return []
+    }
+}
+
+const getArtistStreamingData = async (id) => {
+    try {
+        const streamingData = await Artist.findOne({ spotifyId: id })
+        return streamingData
+    } catch (error) {
+        console.error(error);
+        return null
+    }
+}
+
+const getDashboardArtistRankingData = async (artistFavourites) => {
+    try {
+        let responseData = [];
+        for (let artist of artistFavourites) {
+            const overAllData = await getArtistOverallDailyData(artist.spotifyId)
+            // get the streams, daily obj from the overall data
+            let streams = overAllData.find(data => data.type === "Streams")
+            let daily = overAllData.find(data => data.type === "Daily")
+
+            let artistData = {
+                streams: streams?.total,
+                dailyStreams: daily?.total,
+                spotifyId: artist.spotifyId,
+                image: artist.image,
+                name: artist.name
+            }
+
+            responseData.push(artistData)
+        }
+
+        return responseData?.sort((a, b) => {
+            const aNum = parseInt(a?.dailyStreams?.replace(/,/g, ''))
+            const bNum = parseInt(b?.dailyStreams?.replace(/,/g, ''))
+            return bNum - aNum
+        }) || []
+
+    } catch (error) {
+        console.error(error);
+        return []
+    }
+}
+
 module.exports = {
     getArtistSongsDailyData,
     getArtistAlbumsDailyData,
-    getArtistOverallDailyData
+    getArtistOverallDailyData,
+    getArtistSpotifyApiData,
+    getArtistMostPopularSongs,
+    getAlbumData,
+    getTrackData,
+    getNewReleases,
+    getArtistStreamingData,
+    getDashboardArtistRankingData
 }
