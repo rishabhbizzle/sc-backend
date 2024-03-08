@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -34,6 +34,8 @@ app.get('/', (req, res) => {
         message: 'Hello World!',
     });
 });
+
+require('./cron/controller');
 
 //kworb
 app.get('/api/v1/daily/songs/:id', async (req, res) => {
@@ -126,6 +128,22 @@ app.get('/api/v1/others/new-releases', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getNewReleases(id);
+        return res.json({ status: 'success', data: data});
+    } catch (error) {
+        console.error(error);
+        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
+app.get('/api/v1/user/isFavourite', async (req, res) => {
+    try {
+        const { id, spotifyId, type } = req.body;
+        if (!id || !spotifyId || !type) {
+            return res.json({ status: 'error', message: 'Please provide all required fields' });
+        }
+
+        const data = await isUserFavorite(type, spotifyId, id);
         return res.json({ status: 'success', data: data});
     } catch (error) {
         console.error(error);

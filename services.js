@@ -4,6 +4,7 @@ const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
 const Album= require('./models/albumModel');
 const Song  = require('./models/songModel');
 const Artist = require('./models/artistModel');
+const UserFavorite = require('./models/userModel');
 
 // Initialize the Spotify API client with client credentials
 
@@ -262,6 +263,21 @@ const getDashboardArtistRankingData = async (artistFavourites) => {
     }
 }
 
+
+const isUserFavorite = async (type, spotifyId, id) => {
+    try {
+        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId })
+        if (userFavourite) {
+            return true
+        }
+        return false
+    } catch (error) {
+        console.error(error);
+        throw error
+    }
+}
+
+
 module.exports = {
     getArtistSongsDailyData,
     getArtistAlbumsDailyData,
@@ -272,5 +288,6 @@ module.exports = {
     getTrackData,
     getNewReleases,
     getArtistStreamingData,
-    getDashboardArtistRankingData
+    getDashboardArtistRankingData,
+    isUserFavorite
 }
