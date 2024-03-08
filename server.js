@@ -144,9 +144,11 @@ app.post('/api/v1/user/isFavourite', async (req, res) => {
         if (!id || !spotifyId || !type) {
             return res.json({ status: 'error', message: 'Please provide all required fields' });
         }
-
         const data = await isUserFavorite(type, spotifyId, id);
-        return res.json({ status: 'success', data: data});
+        setTimeout(() => {
+            return res.json({ status: 'success', data: data});
+        }, 10000);
+
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
