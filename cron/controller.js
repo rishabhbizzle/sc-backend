@@ -342,7 +342,7 @@ const storeArtistDiscographyDataInDB = async (artistId) => {
     }
 }
 
-cron.schedule('09 21 * * *', async () => {
+cron.schedule('35 13 * * *', async () => {
     console.log("====== CRON EXECUTOR STARTED ======")
     try {
         let results = []
