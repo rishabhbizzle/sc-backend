@@ -6,6 +6,8 @@ const port = 4000;
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
+
+app.use(express.json());
 app.use(cors())
 
  async function connect() {
@@ -136,7 +138,7 @@ app.get('/api/v1/others/new-releases', async (req, res) => {
     }
 });
 
-app.get('/api/v1/user/isFavourite', async (req, res) => {
+app.post('/api/v1/user/isFavourite', async (req, res) => {
     try {
         const { id, spotifyId, type } = req.body;
         if (!id || !spotifyId || !type) {
