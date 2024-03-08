@@ -277,6 +277,27 @@ const isUserFavorite = async (type, spotifyId, id) => {
     }
 }
 
+const getRecomendations = async (type) => {
+    try {
+        let recomendations;
+        if (type === "artist") {
+            // get the random 10 artists from database
+            recomendations = await Artist.aggregate([{ $sample: { size: 10 } }])
+        } else if (type === "track") {
+            // get the random 10 songs from database
+            recomendations = await Song.aggregate([{ $sample: { size: 10 } }])
+        } else if (type === "album") {
+            // get the random 10 albums from database
+            recomendations = await Album.aggregate([{ $sample: { size: 10 } }])
+        }
+        return recomendations
+    } catch (error) {
+        console.error(error);
+        return []
+    }
+}
+
+
 
 module.exports = {
     getArtistSongsDailyData,
@@ -289,5 +310,6 @@ module.exports = {
     getNewReleases,
     getArtistStreamingData,
     getDashboardArtistRankingData,
-    isUserFavorite
+    isUserFavorite,
+    getRecomendations
 }
