@@ -10,7 +10,7 @@ const mongoose = require('mongoose');
 app.use(express.json());
 app.use(cors())
 
- async function connect() {
+async function connect() {
     try {
         mongoose.connect(process.env.MONGO_URI);
         const connection = mongoose.connection;
@@ -80,7 +80,7 @@ app.get('/api/v1/artist/popular/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getArtistMostPopularSongs(id);
-        return res.json({ status: 'success', data: data});
+        return res.json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
@@ -93,7 +93,7 @@ app.get('/api/v1/artist/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getArtistSpotifyApiData(id);
-        return res.json({ status: 'success', data: data});
+        return res.json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
@@ -105,7 +105,7 @@ app.get('/api/v1/track/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getTrackData(id);
-        return res.json({ status: 'success', data: data});
+        return res.json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
@@ -117,7 +117,9 @@ app.get('/api/v1/album/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getAlbumData(id);
-        return res.json({ status: 'success', data: data});
+        setTimeout(() => {
+            return res.json({ status: 'success', data: data });
+        }, 20000);
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
@@ -130,7 +132,7 @@ app.get('/api/v1/others/new-releases', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getNewReleases(id);
-        return res.json({ status: 'success', data: data});
+        return res.json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
         return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
@@ -146,7 +148,7 @@ app.post('/api/v1/user/isFavourite', async (req, res) => {
         }
         const data = await isUserFavorite(type, spotifyId, id);
         setTimeout(() => {
-            return res.json({ status: 'success', data: data});
+            return res.json({ status: 'success', data: data });
         }, 10000);
 
     } catch (error) {
