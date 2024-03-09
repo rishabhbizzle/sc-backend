@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -165,6 +165,39 @@ app.post('/api/v1/user/isFavourite', async (req, res) => {
 
     }
 });
+
+app.get('/api/v1/user/dashboard/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return res.json({ status: 'error', message: 'Please provide all required fields' });
+        }
+
+        const data = await getDashboardArtistRankingData(id);
+        return res.json({ status: 'success', data: data});
+    } catch (error) {
+        console.error(error);
+        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
+app.get('/api/v1/user/favourites/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return res.json({ status: 'error', message: 'Please provide all required fields' });
+        }
+
+        const data = await getUserFavourites(id);
+        return res.json({ status: 'success', data: data});
+    } catch (error) {
+        console.error(error);
+        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
 
 app.get('/api/v1/others/getRecomendations', async (req, res) => {
     try {

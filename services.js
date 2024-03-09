@@ -203,8 +203,10 @@ const getTrackData = async (id) => {
     try {
         console.log('fetching track data:', id)
         const trackDetails = await Spotify.tracks.get(id, "US")
+        const trackFeatures = await Spotify.tracks.audioFeatures(id);
+        // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
         let streamingData = await Song.findOne({ spotifyId: id })
-        return { trackDetails, streamingData }
+        return { trackDetails, streamingData, trackFeatures}
     } catch (error) {
         console.error(error);
         return { trackDetails: null, streamingData: null }
@@ -230,10 +232,24 @@ const getArtistStreamingData = async (id) => {
         return null
     }
 }
+const getUserFavourites = async (kindeId) => {
+    try {
+        let userFavourites = await UserFavorite.find({ kindeId: kindeId })
+        // divide the favourites into types
+        let artistFavourites = userFavourites.filter(fav => fav.type === "artist")
+        let albumFavourites = userFavourites.filter(fav => fav.type === "album")
+        let trackFavourites = userFavourites.filter(fav => fav.type === "track")
+        return { artistFavourites, albumFavourites, trackFavourites }
+    } catch (error) {
+        console.error(error);
+        return { artistFavourites: [], albumFavourites: [], trackFavourites: [] }
+    }
+}
 
-const getDashboardArtistRankingData = async (artistFavourites) => {
+const getDashboardArtistRankingData = async (userId) => {
     try {
         let responseData = [];
+        const { artistFavourites } = await getUserFavourites(userId)
         for (let artist of artistFavourites) {
             const overAllData = await getArtistOverallDailyData(artist.spotifyId)
             // get the streams, daily obj from the overall data
@@ -282,13 +298,19 @@ const getRecomendations = async (type) => {
         let recomendations;
         if (type === "artist") {
             // get the random 10 artists from database
-            recomendations = await Artist.aggregate([{ $sample: { size: 10 } }])
+            recomendations = await Artist.aggregate([
+                { $match: { image: { $exists: true } } },
+                { $sample: { size: 10 } }])
         } else if (type === "track") {
             // get the random 10 songs from database
-            recomendations = await Song.aggregate([{ $sample: { size: 10 } }])
+            recomendations = await Song.aggregate([
+                { $match: { image: { $exists: true } } },
+                { $sample: { size: 10 } }])
         } else if (type === "album") {
             // get the random 10 albums from database
-            recomendations = await Album.aggregate([{ $sample: { size: 10 } }])
+            recomendations = await Album.aggregate([
+                { $match: { image: { $exists: true } } },
+                { $sample: { size: 10 } }])
         }
         return recomendations
     } catch (error) {
@@ -296,6 +318,8 @@ const getRecomendations = async (type) => {
         return []
     }
 }
+
+
 
 
 
@@ -311,5 +335,6 @@ module.exports = {
     getArtistStreamingData,
     getDashboardArtistRankingData,
     isUserFavorite,
-    getRecomendations
+    getRecomendations,
+    getUserFavourites
 }
