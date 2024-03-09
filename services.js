@@ -61,6 +61,7 @@ const getArtistSongsDailyData = async (artistId) => {
         return songsData;
     } catch (error) {
         console.error(error);
+        await browser.close();
         return []
     }
 
@@ -320,6 +321,215 @@ const getRecomendations = async (type) => {
 }
 
 
+const getMostStreamedArtists = async (limit) => {
+    console.log('fetching most streamed artists')
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = `${process.env.DATA_SOURCE}spotify/artists.html`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 0) {
+                const table = tables[0];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows.slice(1, 101).map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+                    let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
+                    let parts = link && link?.split('/');
+                    let id = parts && parts[parts.length - 1]?.split('_');
+                    id = id && id[0];
+                    const rowData = {
+                        id: id,
+                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
+                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        lead: columns[3] && columns[3].textContent ? columns[3].textContent : null,
+                        solo: columns[4] && columns[4].textContent ? columns[4].textContent : null,
+                        feature: columns[5] && columns[5].textContent ? columns[5].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        await browser.close();
+    }
+}
+
+
+const getMostMonthlyListeners = async (limit = 100) => {
+    console.log('fetching most streamed artists')
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = `${process.env.DATA_SOURCE}spotify/listeners.html`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 0) {
+                const table = tables[0];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows.slice(1, 101).map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+                    let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
+                    let parts = link && link?.split('/');
+                    let id = parts && parts[parts.length - 1]?.split('_');
+                    id = id && id[0];
+
+                    const rowData = {
+                        id: id,
+                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
+                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        peak: columns[4] && columns[4].textContent ? columns[4].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
+const getMostStreamedSongs = async (year) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = year ? `${process.env.DATA_SOURCE}spotify/songs_${year}.html` :`${process.env.DATA_SOURCE}spotify/songs.html`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 0) {
+                const table = tables[0];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows.slice(1, 101).map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+
+                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
+                    let parts = nameText && nameText?.split('-');
+                    let artistName;
+                    let songName;
+                    if (parts?.length > 1) {
+                        artistName = parts && parts[0]?.trim()
+                        songName = parts && parts[1]?.trim()
+                    }
+
+                    const rowData = {
+                        name: songName,
+                        artist: artistName,
+                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
+const getMostStreamedAlbums = async (year) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = `${process.env.DATA_SOURCE}spotify/albums.html`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 0) {
+                const table = tables[0];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows.slice(1, 101).map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+
+                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
+                    let parts = nameText && nameText?.split('-');
+                    let artistName;
+                    let songName;
+                    if (parts?.length > 1) {
+                        artistName = parts && parts[0]?.trim()
+                        songName = parts && parts[1]?.trim()
+                    }
+
+                    const rowData = {
+                        name: songName,
+                        artist: artistName,
+                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
+
+
 
 
 
@@ -336,5 +546,9 @@ module.exports = {
     getDashboardArtistRankingData,
     isUserFavorite,
     getRecomendations,
-    getUserFavourites
+    getUserFavourites,
+    getMostStreamedArtists,
+    getMostMonthlyListeners,
+    getMostStreamedSongs,
+    getMostStreamedAlbums
 }
