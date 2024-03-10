@@ -528,7 +528,22 @@ const getMostStreamedAlbums = async (year) => {
     }
 }
 
-
+const markFavourite = async (id, type, spotifyId, image, name) => {
+    try {
+        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId })
+        if (userFavourite) {
+            await UserFavorite.deleteOne({ kindeId: id, type: type, spotifyId: spotifyId })
+            return { message: "Removed from favourites", type: "success" }
+        } else {
+            await UserFavorite.create({ kindeId: id, type: type, spotifyId: spotifyId, image: image, name: name })
+            return { message: "Added to favourites", type: "success" }
+        }
+    }
+    catch (error) {
+        console.error(error);
+        throw error
+    }
+}
 
 
 
@@ -550,5 +565,6 @@ module.exports = {
     getMostStreamedArtists,
     getMostMonthlyListeners,
     getMostStreamedSongs,
-    getMostStreamedAlbums
+    getMostStreamedAlbums,
+    markFavourite
 }

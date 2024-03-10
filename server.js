@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -44,10 +44,10 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const artistData = await getArtistSongsDailyData(id);
-        return res.json({ status: 'success', data: artistData });
+        return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -56,10 +56,10 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const artistData = await getArtistAlbumsDailyData(id);
-        return res.json({ status: 'success', data: artistData });
+        return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
     }
 });
 
@@ -67,10 +67,10 @@ app.get('/api/v1/daily/overall/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const artistData = await getArtistOverallDailyData(id);
-        return res.json({ status: 'success', data: artistData });
+        return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
     }
 });
 
@@ -80,10 +80,10 @@ app.get('/api/v1/artist/popular/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getArtistMostPopularSongs(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -93,10 +93,10 @@ app.get('/api/v1/artist/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getArtistSpotifyApiData(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -105,10 +105,10 @@ app.get('/api/v1/artist/streams/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getArtistStreamingData(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -117,10 +117,10 @@ app.get('/api/v1/track/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getTrackData(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -129,10 +129,10 @@ app.get('/api/v1/album/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getAlbumData(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -142,10 +142,10 @@ app.get('/api/v1/others/new-releases', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await getNewReleases(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -158,10 +158,10 @@ app.post('/api/v1/user/isFavourite', async (req, res) => {
         }
 
         const data = await isUserFavorite(type, spotifyId, id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -174,10 +174,26 @@ app.get('/api/v1/user/dashboard/:id', async (req, res) => {
         }
 
         const data = await getDashboardArtistRankingData(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
+app.post('/api/v1/user/markFavourite', async (req, res) => {
+    try {
+        const { id, type, spotifyId, image, name } = req.body;
+        if (!id || !spotifyId || !type || !image || !name) {
+            return res.status(400).json({ status: 'error', message: 'Please provide all required fields' });
+        }
+
+        const data = await markFavourite(id, type, spotifyId, image, name);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -190,10 +206,10 @@ app.get('/api/v1/user/favourites/:id', async (req, res) => {
         }
 
         const data = await getUserFavourites(id);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -206,10 +222,10 @@ app.get('/api/v1/others/getRecomendations', async (req, res) => {
             return res.json({ status: 'error', message: 'Please provide all required fields' });
         }
         const data = await getRecomendations(type);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -218,10 +234,10 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
     try {
         const { limit } = req.query;
         const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -230,10 +246,10 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
     try {
         const { limit } = req?.query;
         const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -242,10 +258,10 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
     try {
         const { year } = req?.query;
         const data = await getMostStreamedSongs(year);
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -253,10 +269,10 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
 app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
     try {
         const data = await getMostStreamedAlbums();
-        return res.json({ status: 'success', data: data });
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.json({ status: 'error', message: error?.message || 'Something went wrong' });
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
     }
 });
@@ -269,4 +285,4 @@ app.use('*', (req, res) => {
 });
 
 
-app.listen(port, () => console.log(`Example app listening on port ${port}!`));
+app.listen(port, () => console.log(`App listening on port ${port}!`));
