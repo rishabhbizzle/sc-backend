@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -276,6 +276,30 @@ app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
 
     }
 });
+
+app.get('/api/v1/others/mostStreamedSongsInSingleDay', async (req, res) => {
+    try {
+        const { type } = req?.query;
+        const data = await getMostStreamedSongsInSingleDay(type);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
+app.get('/api/v1/others/mostStreamedSongsInSingleWeek', async (req, res) => {
+    try {
+        const data = await getMostStreamedSongsInSingleWeek();
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
 
 
 app.use('*', (req, res) => {

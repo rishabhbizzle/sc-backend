@@ -1,8 +1,8 @@
 require('dotenv').config();
 const puppeteer = require('puppeteer');
 const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
-const Album= require('./models/albumModel');
-const Song  = require('./models/songModel');
+const Album = require('./models/albumModel');
+const Song = require('./models/songModel');
 const Artist = require('./models/artistModel');
 const UserFavorite = require('./models/userModel');
 
@@ -207,7 +207,7 @@ const getTrackData = async (id) => {
         const trackFeatures = await Spotify.tracks.audioFeatures(id);
         // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
         let streamingData = await Song.findOne({ spotifyId: id })
-        return { trackDetails, streamingData, trackFeatures}
+        return { trackDetails, streamingData, trackFeatures }
     } catch (error) {
         console.error(error);
         return { trackDetails: null, streamingData: null }
@@ -434,7 +434,7 @@ const getMostStreamedSongs = async (year) => {
     });
     try {
         const page = await browser.newPage();
-        const url = year ? `${process.env.DATA_SOURCE}spotify/songs_${year}.html` :`${process.env.DATA_SOURCE}spotify/songs.html`;
+        const url = year ? `${process.env.DATA_SOURCE}spotify/songs_${year}.html` : `${process.env.DATA_SOURCE}spotify/songs.html`;
         await page.goto(url);
         await page.waitForSelector('table');
         const overallData = await page.evaluate(() => {
@@ -546,6 +546,127 @@ const markFavourite = async (id, type, spotifyId, image, name) => {
 }
 
 
+const getMostStreamedSongsInSingleDay = async (type) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const index = type === "holiday" ? 8 : 7;
+        const page = await browser.newPage();
+        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate((index) => {
+            function formatWikiString(inputString) {
+                try {
+
+                    inputString = inputString.trim().replace(/^,|,$/g, '');
+                    let parsedString;
+                    try {
+                        parsedString = JSON.parse(`[${inputString}]`);
+                    } catch (error) {
+                        console.error("Error parsing input string:", error);
+                        return null;
+                    }
+                    return parsedString.join(', ');
+                } catch (error) {
+                    return null
+                }
+            }
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 7) {
+                const table = tables[index];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows?.slice(1)?.map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+                    const rowData = {
+                        name: columns[0] && columns[0].textContent ? formatWikiString(columns[0].textContent) : null,
+                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        // dateAchieved: columns[3] && columns[3].textContent ? columns[3].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        }, index);
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
+const getMostStreamedSongsInSingleWeek = async () => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            function formatWikiString(inputString) {
+                try {
+
+                    inputString = inputString.trim().replace(/^,|,$/g, '');
+                    let parsedString;
+                    try {
+                        parsedString = JSON.parse(`[${inputString}]`);
+                    } catch (error) {
+                        console.error("Error parsing input string:", error);
+                        return null;
+                    }
+                    return parsedString.join(', ');
+                } catch (error) {
+                    return null
+                }
+            }
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 9) {
+                const table = tables[9];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows?.slice(1)?.map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+                    const rowData = {
+                        name: columns[0] && columns[0].textContent ? formatWikiString(columns[0].textContent) : null,
+                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        dateAchieved: columns[4] && columns[4].textContent ? columns[4].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
+
+
 
 
 module.exports = {
@@ -566,5 +687,7 @@ module.exports = {
     getMostMonthlyListeners,
     getMostStreamedSongs,
     getMostStreamedAlbums,
-    markFavourite
+    markFavourite,
+    getMostStreamedSongsInSingleDay,
+    getMostStreamedSongsInSingleWeek
 }
