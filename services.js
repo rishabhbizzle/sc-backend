@@ -206,7 +206,25 @@ const getTrackData = async (id) => {
         const trackDetails = await Spotify.tracks.get(id, "US")
         const trackFeatures = await Spotify.tracks.audioFeatures(id);
         // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
-        let streamingData = await Song.findOne({ spotifyId: id })
+        let streamingData 
+        const isrc = trackDetails?.external_ids?.isrc
+        if (isrc) {
+            // get all  version of the track from earliest to latest using updatedAt
+            let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
+
+            // collect all key values from dailyStreams obj from the track versions
+            let dailyStreams = {}
+
+            for (let version of allTrackVersions) {
+                dailyStreams = {  ...version.dailyStreams, ...dailyStreams}
+            }
+            // get the latest version of the track
+            streamingData = allTrackVersions[0]
+            streamingData.dailyStreams = dailyStreams
+
+        } else {
+            streamingData = await Song.findOne({ spotifyId: id })
+        }
         return { trackDetails, streamingData, trackFeatures }
     } catch (error) {
         console.error(error);

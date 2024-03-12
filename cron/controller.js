@@ -73,8 +73,7 @@ const storeArtistSongsDataInDB = async (artistId, browser) => {
 
                 //  check if the song exists in the database already
                 const song = await Song.findOne({ spotifyId: songId });
-                let songData = await Spotify.tracks.get(songId);
-
+                
                 if (song) {
                     // update the song
                     let dailyStreamsObj = song.dailyStreams ? song.dailyStreams : {};
@@ -83,12 +82,14 @@ const storeArtistSongsDataInDB = async (artistId, browser) => {
                     let newData = {
                         totalStreams: totalInteger,
                         dailyStreams: dailyStreamsObj,
-                        image: songData?.album?.images?.length > 0 ? songData?.album?.images[0]?.url : null
+                        // isrc: songData?.external_ids?.isrc ? songData?.external_ids?.isrc : null,
+                        // image: songData?.album?.images?.length > 0 ? songData?.album?.images[0]?.url : null
                     }
 
                     await Song.updateOne({ spotifyId: songId }, newData);
 
                 } else {
+                    let songData = await Spotify.tracks.get(songId);
                     // create the song
                     const finalString = data?.title?.startsWith('*') ? data?.title?.substring(1) : data?.title;
                     const newSong = {
@@ -99,6 +100,7 @@ const storeArtistSongsDataInDB = async (artistId, browser) => {
                         dailyStreams: {
                             [formattedDate]: dailyInteger
                         },
+                        isrc: songData?.external_ids?.isrc ? songData?.external_ids?.isrc : null,
                         image: songData?.album?.images?.length > 0 ? songData?.album?.images[0]?.url : null
                     }
                     await Song.create(newSong);
@@ -276,7 +278,6 @@ const storeArtistAlbumsDataInDB = async (artistId, browser) => {
 
                 //  check if the song exists in the database already
                 const album = await Album.findOne({ spotifyId: albumId });
-                let albumData = await Spotify.albums.get(albumId);
 
                 if (album) {
                     // update the album
@@ -286,7 +287,7 @@ const storeArtistAlbumsDataInDB = async (artistId, browser) => {
                     let newData = {
                         totalStreams: totalInteger,
                         dailyStreams: dailyStreamsObj,
-                        image: albumData?.images?.length > 0 ? albumData?.images[0]?.url : null
+                        // image: albumData?.images?.length > 0 ? albumData?.images[0]?.url : null
                     }
 
                     await Album.updateOne({ spotifyId: albumId }, newData);
@@ -294,6 +295,7 @@ const storeArtistAlbumsDataInDB = async (artistId, browser) => {
 
                 } else {
                     // create the album
+                    let albumData = await Spotify.albums.get(albumId);
                     const finalString = data?.title?.startsWith('^') ? data?.title?.substring(1) : data?.title;
                     const newAlbum = {
                         spotifyId: albumId,
@@ -342,19 +344,27 @@ const storeArtistDiscographyDataInDB = async (artistId) => {
     }
 }
 
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 cron.schedule('35 13 * * *', async () => {
     console.log("====== CRON EXECUTOR STARTED ======")
     try {
         let results = []
         let priorityArtists = await PriorityArtist.find({})
-        for (const artist of priorityArtists) {
+        for (const [index, artist] of priorityArtists.entries()) {
             console.log("====== ARTIST ======", artist.spotifyId)
             let res = await storeArtistDiscographyDataInDB(artist.spotifyId)
             results.push({
-                artistId: artist.spotifyId,
-                result: res
+            artistId: artist.spotifyId,
+            result: res
             })
             console.log("====== ARTIST DONE ======", artist.spotifyId)
+            
+            // Wait for 40 seconds before processing the next artist
+            if (index !== priorityArtists.length - 1) {
+                console.log("====== Waiting for 35 seconds ======")
+                await delay(35000); // 40 seconds delay
+            }
         }
 
         console.log("====== PRIORITY ARTISTS DONE ======")
@@ -366,6 +376,5 @@ cron.schedule('35 13 * * *', async () => {
 },{
     scheduled: true,
     timezone: 'Asia/Kolkata' // Set the timezone to IST
-}
-);
+});
 
