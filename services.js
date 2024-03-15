@@ -206,22 +206,24 @@ const getTrackData = async (id) => {
         const trackDetails = await Spotify.tracks.get(id, "US")
         const trackFeatures = await Spotify.tracks.audioFeatures(id);
         // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
-        let streamingData 
+        let streamingData
         const isrc = trackDetails?.external_ids?.isrc
         if (isrc) {
             // get all  version of the track from earliest to latest using updatedAt
             let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
+            if (allTrackVersions.length === 0) {
+                streamingData = await Song.findOne({ spotifyId: id })
+            } else {
+                // collect all key values from dailyStreams obj from the track versions
+                let dailyStreams = {}
 
-            // collect all key values from dailyStreams obj from the track versions
-            let dailyStreams = {}
-
-            for (let version of allTrackVersions) {
-                dailyStreams = {  ...version.dailyStreams, ...dailyStreams}
+                for (let version of allTrackVersions) {
+                    dailyStreams = { ...version.dailyStreams, ...dailyStreams }
+                }
+                // get the latest version of the track
+                streamingData = allTrackVersions[0]
+                streamingData.dailyStreams = dailyStreams
             }
-            // get the latest version of the track
-            streamingData = allTrackVersions[0]
-            streamingData.dailyStreams = dailyStreams
-
         } else {
             streamingData = await Song.findOne({ spotifyId: id })
         }
@@ -683,6 +685,67 @@ const getMostStreamedSongsInSingleWeek = async () => {
     }
 }
 
+const getMostStreamedAlbumInSingle = async (mode = 'day') => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate((mode) => {
+            function formatWikiString(inputString) {
+                try {
+
+                    inputString = inputString.trim().replace(/^,|,$/g, '');
+                    let parsedString;
+                    try {
+                        parsedString = JSON.parse(`[${inputString}]`);
+                    } catch (error) {
+                        console.error("Error parsing input string:", error);
+                        return null;
+                    }
+                    return parsedString.join(', ');
+                } catch (error) {
+                    return null
+                }
+            }
+            const tables = document.querySelectorAll('table');
+            if (tables.length > mode ==='day' ? 13 : 14) {
+                const table = tables[mode ==='day' ? 13 : 14];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows?.slice(1)?.map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+                    const rowData = {
+                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
+                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        tracks: columns[3] && columns[3].textContent ? columns[3].textContent : null,
+                        average: columns[4] && columns[4].textContent ? columns[4].textContent : null,
+                        dateAchieved: columns[6] && columns[6].textContent ? columns[6].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        }, mode);
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
 
 
 
@@ -707,5 +770,6 @@ module.exports = {
     getMostStreamedAlbums,
     markFavourite,
     getMostStreamedSongsInSingleDay,
-    getMostStreamedSongsInSingleWeek
+    getMostStreamedSongsInSingleWeek,
+    getMostStreamedAlbumInSingle
 }

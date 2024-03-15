@@ -1,14 +1,19 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
 
+
+
 app.use(express.json());
-app.use(cors())
+app.use(cors({
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    origin: ['http://localhost:3000', 'https://www.spotracker.tech/', 'https://spotracker.tech/']
+  }))
 
 async function connect() {
     try {
@@ -292,6 +297,18 @@ app.get('/api/v1/others/mostStreamedSongsInSingleDay', async (req, res) => {
 app.get('/api/v1/others/mostStreamedSongsInSingleWeek', async (req, res) => {
     try {
         const data = await getMostStreamedSongsInSingleWeek();
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+
+    }
+});
+
+app.get('/api/v1/others/mostStreamedAlbumsInSingle', async (req, res) => {
+    try {
+        const { mode } = req?.query;
+        const data = await getMostStreamedAlbumInSingle(mode);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
