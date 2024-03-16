@@ -12,7 +12,7 @@ const mongoose = require('mongoose');
 app.use(express.json());
 app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech']
+    origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech', 'https://statforfans.netlify.app', 'https://www.statforfans.netlify.app']
   }))
 
 async function connect() {
