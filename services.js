@@ -213,9 +213,13 @@ const getTrackData = async (id) => {
             let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
             if (allTrackVersions.length > 0) {
                 // maintain the current and collect all key values from dailyStreams obj from the track versions
-                let dailyStreams = {
-                    ...streamingData.dailyStreams
+                let dailyStreams = {}
+
+                if (streamingData?.dailyStreams) {
+                    dailyStreams = { ...streamingData.dailyStreams };
                 }
+
+
                 for (let version of allTrackVersions) {
                     dailyStreams = { ...version.dailyStreams, ...dailyStreams }
                 }
