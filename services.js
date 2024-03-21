@@ -206,26 +206,33 @@ const getTrackData = async (id) => {
         const trackDetails = await Spotify.tracks.get(id, "US")
         const trackFeatures = await Spotify.tracks.audioFeatures(id);
         // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
-        let streamingData
+        let streamingData = await Song.findOne({ spotifyId: id })
         const isrc = trackDetails?.external_ids?.isrc
         if (isrc) {
             // get all  version of the track from earliest to latest using updatedAt
             let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
-            if (allTrackVersions.length === 0) {
-                streamingData = await Song.findOne({ spotifyId: id })
-            } else {
-                // collect all key values from dailyStreams obj from the track versions
-                let dailyStreams = {}
-
+            if (allTrackVersions.length > 0) {
+                // maintain the current and collect all key values from dailyStreams obj from the track versions
+                let dailyStreams = {
+                    ...streamingData.dailyStreams
+                }
                 for (let version of allTrackVersions) {
                     dailyStreams = { ...version.dailyStreams, ...dailyStreams }
                 }
+
+                // sort the dailyStreams obj by date early to latest
+                const sortedDailyStreams = Object.fromEntries(
+                    Object.entries(dailyStreams)
+                        .sort((a, b) => {
+                            const dateA = new Date(a[0].split('-').reverse().join('-'));
+                            const dateB = new Date(b[0].split('-').reverse().join('-'));
+                            return dateA - dateB;
+                        })
+                );
                 // get the latest version of the track
                 streamingData = allTrackVersions[0]
-                streamingData.dailyStreams = dailyStreams
+                streamingData.dailyStreams = sortedDailyStreams
             }
-        } else {
-            streamingData = await Song.findOne({ spotifyId: id })
         }
         return { trackDetails, streamingData, trackFeatures }
     } catch (error) {
