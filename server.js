@@ -17,7 +17,11 @@ app.use(cors({
 
 async function connect() {
     try {
-        mongoose.connect(process.env.MONGO_URI);
+        mongoose.connect(process.env.MONGO_URI, {
+            dbName: 'prod', // Specify the database name here
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
         const connection = mongoose.connection;
         connection.on('connected', () => {
             console.log('MongoDB connected successfully');
