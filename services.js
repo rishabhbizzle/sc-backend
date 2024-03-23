@@ -233,8 +233,9 @@ const getTrackData = async (id) => {
                             return dateA - dateB;
                         })
                 );
-                // get the latest version of the track
-                streamingData = allTrackVersions[0]
+                // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
+                const latestVersion = allTrackVersions[0].updatedAt > streamingData.updatedAt ? allTrackVersions[0] : streamingData
+                streamingData = latestVersion
                 streamingData.dailyStreams = sortedDailyStreams
             }
         }

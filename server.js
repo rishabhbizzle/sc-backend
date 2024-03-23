@@ -18,7 +18,7 @@ app.use(cors({
 async function connect() {
     try {
         mongoose.connect(process.env.MONGO_URI, {
-            dbName: 'prod', // Specify the database name here
+            dbName: 'prod',
             useNewUrlParser: true,
             useUnifiedTopology: true
         });
