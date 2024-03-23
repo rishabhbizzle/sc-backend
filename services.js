@@ -16,17 +16,16 @@ const Spotify = SpotifyApi.withClientCredentials(
 
 
 const getArtistSongsDailyData = async (artistId) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
     try {
-        console.log('fecthing songs data')
-        const browser = await puppeteer.launch({
-            args: [
-                "--disable-setuid-sandbox",
-                "--no-sandbox",
-                "--single-process",
-                "--no-zygote",
-            ],
-            executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-        });
         const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
@@ -234,7 +233,12 @@ const getTrackData = async (id) => {
                         })
                 );
                 // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
-                const latestVersion = allTrackVersions[0].updatedAt > streamingData.updatedAt ? allTrackVersions[0] : streamingData
+                let latestVersion
+                if (streamingData?.updatedAt) {
+                    latestVersion = allTrackVersions[0].updatedAt > streamingData?.updatedAt ? allTrackVersions[0] : streamingData
+                } else {
+                    latestVersion = allTrackVersions[0]
+                }
                 streamingData = latestVersion
                 streamingData.dailyStreams = sortedDailyStreams
             }
@@ -730,8 +734,8 @@ const getMostStreamedAlbumInSingle = async (mode = 'day') => {
                 }
             }
             const tables = document.querySelectorAll('table');
-            if (tables.length > mode ==='day' ? 13 : 14) {
-                const table = tables[mode ==='day' ? 13 : 14];
+            if (tables.length > mode === 'day' ? 13 : 14) {
+                const table = tables[mode === 'day' ? 13 : 14];
                 const rows = Array.from(table.querySelectorAll('tr'));
                 return rows?.slice(1)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
