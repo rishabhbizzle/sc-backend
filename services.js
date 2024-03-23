@@ -39,7 +39,7 @@ const getArtistSongsDailyData = async (artistId) => {
 
                 const columnIndexesToExtractLinks = [0];
 
-                return rows.map(row => {
+                return rows?.slice(1)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
                     let songTitle = columns[0] && columns[0].textContent ? columns[0].textContent?.startsWith('*') ? columns[0].textContent?.substring(1)?.trim() : columns[0].textContent?.trim() : null
                     let link = columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
@@ -90,7 +90,7 @@ const getArtistAlbumsDailyData = async (artistId) => {
 
                 const columnIndexesToExtractLinks = [0];
 
-                return rows.map(row => {
+                return rows?.slice(1)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
                     let albumTitle = columns[0] && columns[0].textContent ? columns[0].textContent?.startsWith('^') ? columns[0].textContent?.substring(1)?.trim() : columns[0].textContent?.trim() : null
                     let albumLink = columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
@@ -143,7 +143,7 @@ const getArtistOverallDailyData = async (artistId) => {
                 const table = tables[0]; // Select the second table
                 const rows = Array.from(table.querySelectorAll('tr'));
 
-                return rows.slice(1).map(row => {
+                return rows?.slice(1)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
                     const rowData = {
                         type: columns[0] && columns[0].textContent ? columns[0].textContent : null,
@@ -374,7 +374,7 @@ const getMostStreamedArtists = async (limit) => {
             if (tables.length > 0) {
                 const table = tables[0];
                 const rows = Array.from(table.querySelectorAll('tr'));
-                return rows.slice(1, 101).map(row => {
+                return rows?.slice(1, 101)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
                     let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
                     let parts = link && link?.split('/');
@@ -425,7 +425,7 @@ const getMostMonthlyListeners = async (limit = 100) => {
             if (tables.length > 0) {
                 const table = tables[0];
                 const rows = Array.from(table.querySelectorAll('tr'));
-                return rows.slice(1, 101).map(row => {
+                return rows?.slice(1, 101)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
                     let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
                     let parts = link && link?.split('/');
@@ -474,7 +474,7 @@ const getMostStreamedSongs = async (year) => {
             if (tables.length > 0) {
                 const table = tables[0];
                 const rows = Array.from(table.querySelectorAll('tr'));
-                return rows.slice(1, 101).map(row => {
+                return rows?.slice(1, 101)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
 
                     let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
@@ -527,7 +527,7 @@ const getMostStreamedAlbums = async (year) => {
             if (tables.length > 0) {
                 const table = tables[0];
                 const rows = Array.from(table.querySelectorAll('tr'));
-                return rows.slice(1, 101).map(row => {
+                return rows?.slice(1, 101)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
 
                     let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
