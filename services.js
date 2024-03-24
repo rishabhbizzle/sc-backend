@@ -234,8 +234,8 @@ const getTrackData = async (id) => {
                 );
                 // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
                 let latestVersion
-                if (streamingData?.updatedAt) {
-                    latestVersion = allTrackVersions[0].updatedAt > streamingData?.updatedAt ? allTrackVersions[0] : streamingData
+                if (streamingData?.totalStreams) {
+                    latestVersion = allTrackVersions[0].totalStreams > streamingData?.totalStreams ? allTrackVersions[0] : streamingData
                 } else {
                     latestVersion = allTrackVersions[0]
                 }
