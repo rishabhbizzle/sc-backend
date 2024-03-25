@@ -218,10 +218,24 @@ const getTrackData = async (id) => {
                     dailyStreams = { ...streamingData.dailyStreams };
                 }
 
-
                 for (let version of allTrackVersions) {
-                    dailyStreams = { ...version.dailyStreams, ...dailyStreams }
+                    dailyStreams = {  ...dailyStreams, ...version.dailyStreams }
                 }
+
+                // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
+                let latestVersion
+                const highestStreams = allTrackVersions.reduce((prev, current) => (prev.totalStreams > current.totalStreams) ? prev : current)
+                
+                if (streamingData?.totalStreams) {
+                    // get the obj with highest totalStreams from all versions
+                    latestVersion = highestStreams.totalStreams > streamingData?.totalStreams ? highestStreams : streamingData
+                } else {
+                    latestVersion = highestStreams
+                }
+                streamingData = latestVersion
+
+
+                dailyStreams = { ...dailyStreams,  ...latestVersion.dailyStreams }
 
                 // sort the dailyStreams obj by date early to latest
                 const sortedDailyStreams = Object.fromEntries(
@@ -232,14 +246,7 @@ const getTrackData = async (id) => {
                             return dateA - dateB;
                         })
                 );
-                // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
-                let latestVersion
-                if (streamingData?.totalStreams) {
-                    latestVersion = allTrackVersions[0].totalStreams > streamingData?.totalStreams ? allTrackVersions[0] : streamingData
-                } else {
-                    latestVersion = allTrackVersions[0]
-                }
-                streamingData = latestVersion
+                
                 streamingData.dailyStreams = sortedDailyStreams
             }
         }
