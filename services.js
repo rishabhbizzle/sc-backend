@@ -578,6 +578,13 @@ const markFavourite = async (id, type, spotifyId, image, name) => {
             await UserFavorite.deleteOne({ kindeId: id, type: type, spotifyId: spotifyId })
             return { message: "Removed from favourites", type: "success" }
         } else {
+            // check if user has already added 5 favourites of artist type if yes dont add more
+            if (type === "artist") {
+                let artistFavourites = await UserFavorite.find({ kindeId: id, type: type })
+                if (artistFavourites.length >= 5) {
+                    throw new Error("You can only add upto 5 favourite artists")
+                }
+            }
             await UserFavorite.create({ kindeId: id, type: type, spotifyId: spotifyId, image: image, name: name })
             return { message: "Added to favourites", type: "success" }
         }
