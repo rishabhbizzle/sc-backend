@@ -5,6 +5,7 @@ const Album = require('./models/albumModel');
 const Song = require('./models/songModel');
 const Artist = require('./models/artistModel');
 const UserFavorite = require('./models/userModel');
+const PriorityArtist = require('./models/priorityArtists');
 
 // Initialize the Spotify API client with client credentials
 
@@ -219,13 +220,13 @@ const getTrackData = async (id) => {
                 }
 
                 for (let version of allTrackVersions) {
-                    dailyStreams = {  ...dailyStreams, ...version.dailyStreams }
+                    dailyStreams = { ...dailyStreams, ...version.dailyStreams }
                 }
 
                 // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
                 let latestVersion
                 const highestStreams = allTrackVersions.reduce((prev, current) => (prev.totalStreams > current.totalStreams) ? prev : current)
-                
+
                 if (streamingData?.totalStreams) {
                     // get the obj with highest totalStreams from all versions
                     latestVersion = highestStreams.totalStreams > streamingData?.totalStreams ? highestStreams : streamingData
@@ -235,7 +236,7 @@ const getTrackData = async (id) => {
                 streamingData = latestVersion
 
 
-                dailyStreams = { ...dailyStreams,  ...latestVersion.dailyStreams }
+                dailyStreams = { ...dailyStreams, ...latestVersion.dailyStreams }
 
                 // sort the dailyStreams obj by date early to latest
                 const sortedDailyStreams = Object.fromEntries(
@@ -246,7 +247,7 @@ const getTrackData = async (id) => {
                             return dateA - dateB;
                         })
                 );
-                
+
                 streamingData.dailyStreams = sortedDailyStreams
             }
         }
@@ -276,6 +277,124 @@ const getArtistStreamingData = async (id) => {
         return null
     }
 }
+
+const getArtistSocialData = async (id) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const data = await PriorityArtist.findOne({ spotifyId: id })
+
+        if (!data?.cmId) {
+            return null
+        }
+        const page = await browser.newPage();
+        // Replace the URL with the URL of the webpage you want to scrape
+        await page.goto(`https://app.chartmetric.com/artist/${data?.cmId}`, { waitUntil: 'domcontentloaded' });
+
+        // Wait until the data is present in the page
+        // await page.waitForFunction(() => {
+        //     const dataSourceIcons = document.querySelectorAll('.DataSourcePanel_dataSourcesIcons__njYri a');
+        //     return dataSourceIcons.length > 0;
+        // }, { timeout: 10000 });
+
+        // // Extracting data from the HTML
+        // const socialLinks = await page.evaluate(() => {
+        //     const dataSourceIcons = document.querySelectorAll('.DataSourcePanel_dataSourcesIcons__njYri a');
+        //     const sources = [];
+        //     function extractPlatformFromUrl(url) {
+        //         if (!url) return null;
+
+        //         const domains = {
+        //             'spotify': /open.spotify.com/i,
+        //             'itunes': /itunes.apple.com/i,
+        //             'amazon': /music.amazon.com/i,
+        //             'deezer': /deezer.com/i,
+        //             'youtube': /youtube.com/i,
+        //             'soundcloud': /soundcloud.com/i,
+        //             'pandora': /pandora.com/i,
+        //             'genius': /genius.com/i,
+        //             'shazam': /shazam.com/i,
+        //             'line': /music.line.me/i,
+        //             'melon': /melon.com/i,
+        //             'instagram': /instagram.com/i,
+        //             'facebook': /facebook.com/i,
+        //             'tiktok': /tiktok.com/i,
+        //             'youtubeforartist': /charts.youtube.com/i,
+        //             'twitter': /twitter.com/i,
+        //             'wikipedia': /wikipedia.org/i,
+        //             'musicbrainz': /musicbrainz.org/i,
+        //             'discogs': /discogs.com/i,
+        //             'songkick': /songkick.com/i,
+        //             'bandsintown': /bandsintown.com/i,
+        //             'tvmaze': /tvmaze.com/i,
+        //         };
+
+        //         for (const [platform, regex] of Object.entries(domains)) {
+        //             if (regex.test(url)) {
+        //                 return platform;
+        //             }
+        //         }
+
+        //         return null;
+        //     }
+        //     dataSourceIcons.forEach(icon => {
+        //         const link = icon.getAttribute('href')
+        //         const platform = extractPlatformFromUrl(link);
+        //         const source = {
+        //             link,
+        //             platform
+        //         };
+        //         sources.push(source);
+        //     });
+        //     return sources;
+        // });
+
+
+        await page.waitForSelector('.TopStats_topStatsContainerItem__3SRla');
+
+        const summaryStats = await page.evaluate(() => {
+            const summaryItems = Array.from(document.querySelectorAll('.TopStats_topStatsContainerItem__3SRla'));
+
+            const stats = summaryItems.map(item => {
+                const platformNameElement = item.querySelector('div > div:nth-child(1) > div');
+                const platformName = platformNameElement?.textContent?.trim();
+                const dataRows = Array.from(item.querySelectorAll('div.TopStats_topStatsContainerItemDetails___Mob8 > div.TopStats_detailRow__m6kRi'));
+                const platformData = {};
+
+                dataRows.forEach(row => {
+                    const label = row.querySelector('.TopStats_statName__hZKYr > p')?.textContent?.trim();
+                    const value = row.querySelector('.TopStats_activeToggle__UrDUm > p')?.textContent?.trim();
+                    if (label) platformData[label] = value;
+                });
+
+                return {
+                    platform: platformName,
+                    data: platformData
+                };
+            });
+
+            return stats;
+        });
+
+        return { socialSummary: summaryStats };
+
+    } catch (error) {
+        console.log('error from getArtistSocialdata:', id, error);
+        return null
+    } finally {
+        await browser.close();
+    }
+
+}
+
+
 const getUserFavourites = async (kindeId) => {
     try {
         let userFavourites = await UserFavorite.find({ kindeId: kindeId })
@@ -801,5 +920,6 @@ module.exports = {
     markFavourite,
     getMostStreamedSongsInSingleDay,
     getMostStreamedSongsInSingleWeek,
-    getMostStreamedAlbumInSingle
+    getMostStreamedAlbumInSingle,
+    getArtistSocialData
 }
