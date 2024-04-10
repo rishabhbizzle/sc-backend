@@ -356,6 +356,8 @@ const getArtistSocialData = async (id) => {
         //     return sources;
         // });
 
+        await page.waitForSelector('.StatTilesRow_rowStat__n_7Gg');
+        const socialFootprint = await page.$eval('.StatTilesRow_value__r3Iqn', element => element?.textContent);
 
         await page.waitForSelector('.TopStats_topStatsContainerItem__3SRla');
 
@@ -383,7 +385,7 @@ const getArtistSocialData = async (id) => {
             return stats;
         });
 
-        return { socialSummary: summaryStats };
+        return { socialSummary: summaryStats,  socialFootprint: socialFootprint };
 
     } catch (error) {
         console.log('error from getArtistSocialdata:', id, error);
