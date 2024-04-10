@@ -6,14 +6,15 @@ const port = 4000;
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
-
-
+const rateLimitMiddleware = require('./utilities/rateLimiter');
 
 app.use(express.json());
 app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech', 'https://statscrave.com', 'https://www.statscrave.com', 'https://statforfans.netlify.app', 'https://www.statforfans.netlify.app']
   }))
+
+app.use(rateLimitMiddleware);
 
 async function connect() {
     try {
@@ -42,7 +43,7 @@ connect();
 
 app.get('/', (req, res) => {
     res.json({
-        message: 'Hello World!',
+        message: 'Welcome to Spotracker API!',
     });
 });
 
