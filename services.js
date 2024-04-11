@@ -6,7 +6,7 @@ const Song = require('./models/songModel');
 const Artist = require('./models/artistModel');
 const UserFavorite = require('./models/userModel');
 const PriorityArtist = require('./models/priorityArtists');
-
+const axios = require('axios');
 // Initialize the Spotify API client with client credentials
 
 const Spotify = SpotifyApi.withClientCredentials(
@@ -166,11 +166,31 @@ const getArtistOverallDailyData = async (artistId) => {
     }
 }
 
+function removeAnchorTag(summary) {
+    const pattern = /<a\s+(?:[^>]*?\s+)?href="([^"]*)"[^>]*>.*?<\/a>/gi;
+    return summary.replace(pattern, '');
+}
 
 const getArtistSpotifyApiData = async (id) => {
     try {
         const artist = await Spotify.artists.get(id)
-        return artist
+
+        // more details about the artist
+        let lastFmData;
+        try {
+            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${artist.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`)
+        } catch (error) {
+            console.error(error);
+        }
+
+        return {
+            ...artist,
+            ...(lastFmData?.data?.artist ? {
+                lastFmStats: lastFmData?.data?.artist?.stats,
+                onTour: lastFmData?.data?.artist?.ontour,
+                summary: removeAnchorTag(lastFmData?.data?.artist?.bio?.summary)
+            } : {})
+        }
     } catch (error) {
         console.error(error);
         return null
@@ -356,7 +376,7 @@ const getArtistSocialData = async (id) => {
         //     return sources;
         // });
 
-        await page.waitForSelector('.StatTilesRow_rowStat__n_7Gg');
+        await page.waitForSelector('.StatTilesRow_value__r3Iqn');
         const socialFootprint = await page.$eval('.StatTilesRow_value__r3Iqn', element => element?.textContent);
 
         await page.waitForSelector('.TopStats_topStatsContainerItem__3SRla');
