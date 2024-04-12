@@ -165,14 +165,15 @@ const getArtistOverallDailyData = async (artistId) => {
 }
 
 function removeAnchorTag(summary) {
+    if (!summary) return null;
     const pattern = /<a\s+(?:[^>]*?\s+)?href="([^"]*)"[^>]*>.*?<\/a>/gi;
     return summary.replace(pattern, '');
 }
 
 const getArtistSpotifyApiData = async (id) => {
+    console.log('fetching artist data:', id)
     try {
         const artist = await Spotify.artists.get(id)
-
         // more details about the artist
         let lastFmData;
         try {
@@ -207,11 +208,28 @@ const getArtistMostPopularSongs = async (id) => {
 
 
 const getAlbumData = async (id) => {
+    console.log('fetching album data:', id)
     try {
-        console.log('fetching album data:', id)
         const albumDetails = await Spotify.albums.get(id, "US")
         let streamingData = await Album.findOne({ spotifyId: id })
-        return { albumDetails, streamingData }
+
+        let lastFmData;
+        const artist = albumDetails?.artists[0]?.name
+        try {
+            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${artist}&album=${albumDetails?.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`)
+        } catch (error) {
+            console.error(error);
+        }
+        return {
+            albumDetails: {
+                ...albumDetails,
+                ...(lastFmData?.data?.album ? {
+                    lastFmStats: lastFmData?.data?.album?.stats,
+                    summary: removeAnchorTag(lastFmData?.data?.album?.wiki?.summary)
+                } : {})
+
+            }, streamingData
+        }
     } catch (error) {
         console.error(error);
         return { albumDetails: null, streamingData: null }
@@ -403,7 +421,7 @@ const getArtistSocialData = async (id) => {
             return stats;
         });
 
-        return { socialSummary: summaryStats,  socialFootprint: socialFootprint };
+        return { socialSummary: summaryStats, socialFootprint: socialFootprint };
 
     } catch (error) {
         console.log('error from getArtistSocialdata:', id, error);
@@ -436,14 +454,14 @@ const getDashboardArtistRankingData = async (userId) => {
         for (let artist of artistFavourites) {
             // check if this artists exist in our db or not
 
-            const artistExist =  await getArtistStreamingData(artist.spotifyId)
+            const artistExist = await getArtistStreamingData(artist.spotifyId)
             let streams;
             let daily;
             if (!artistExist) {
-            const overAllData = await getArtistOverallDailyData(artist.spotifyId)
-            // get the streams, daily obj from the overall data
-            streams = overAllData.find(data => data.type === "Streams")?.total
-            daily = overAllData.find(data => data.type === "Daily")?.total
+                const overAllData = await getArtistOverallDailyData(artist.spotifyId)
+                // get the streams, daily obj from the overall data
+                streams = overAllData.find(data => data.type === "Streams")?.total
+                daily = overAllData.find(data => data.type === "Daily")?.total
 
             } else {
                 streams = artistExist.totalStreams?.toLocaleString('en-US')
