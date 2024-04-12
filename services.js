@@ -104,8 +104,6 @@ const getArtistAlbumsDailyData = async (artistId) => {
                         total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
                         daily: columns[2] && columns[2].textContent ? columns[2].textContent : null
                     };
-
-
                     return rowData;
                 });
             }
@@ -436,14 +434,35 @@ const getDashboardArtistRankingData = async (userId) => {
         let responseData = [];
         const { artistFavourites } = await getUserFavourites(userId)
         for (let artist of artistFavourites) {
+            // check if this artists exist in our db or not
+
+            const artistExist =  await getArtistStreamingData(artist.spotifyId)
+            let streams;
+            let daily;
+            if (!artistExist) {
             const overAllData = await getArtistOverallDailyData(artist.spotifyId)
             // get the streams, daily obj from the overall data
-            let streams = overAllData.find(data => data.type === "Streams")
-            let daily = overAllData.find(data => data.type === "Daily")
+            streams = overAllData.find(data => data.type === "Streams")?.total
+            daily = overAllData.find(data => data.type === "Daily")?.total
+
+            } else {
+                streams = artistExist.totalStreams?.toLocaleString('en-US')
+                // get the latest daily streams from the dailyStreams in artist data
+                const sortedDailyStreams = Object.fromEntries(
+                    Object.entries(artistExist?.dailyTotalStreams)
+                        .sort((a, b) => {
+                            const dateA = new Date(a[0].split('-').reverse().join('-'));
+                            const dateB = new Date(b[0].split('-').reverse().join('-'));
+                            return dateA - dateB;
+                        })
+                );
+                const latestDailyStreams = Object.values(sortedDailyStreams).pop()
+                daily = latestDailyStreams?.toLocaleString('en-US')
+            }
 
             let artistData = {
-                streams: streams?.total,
-                dailyStreams: daily?.total,
+                streams: streams,
+                dailyStreams: daily,
                 spotifyId: artist.spotifyId,
                 image: artist.image,
                 name: artist.name
@@ -451,7 +470,6 @@ const getDashboardArtistRankingData = async (userId) => {
 
             responseData.push(artistData)
         }
-
         return responseData?.sort((a, b) => {
             const aNum = parseInt(a?.dailyStreams?.replace(/,/g, ''))
             const bNum = parseInt(b?.dailyStreams?.replace(/,/g, ''))
