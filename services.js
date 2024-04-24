@@ -785,7 +785,7 @@ const getMostStreamedSongsInSingleDay = async (type) => {
         executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
     });
     try {
-        const index = type === "holiday" ? 8 : 7;
+        const index = type === "holiday" ? 9 : 8;
         const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
@@ -808,7 +808,7 @@ const getMostStreamedSongsInSingleDay = async (type) => {
                 }
             }
             const tables = document.querySelectorAll('table');
-            if (tables.length > 7) {
+            if (tables.length > 8) {
                 const table = tables[index];
                 const rows = Array.from(table.querySelectorAll('tr'));
                 return rows?.slice(1)?.map(row => {
@@ -867,8 +867,8 @@ const getMostStreamedSongsInSingleWeek = async () => {
                 }
             }
             const tables = document.querySelectorAll('table');
-            if (tables.length > 9) {
-                const table = tables[9];
+            if (tables.length > 10) {
+                const table = tables[10];
                 const rows = Array.from(table.querySelectorAll('tr'));
                 return rows?.slice(1)?.map(row => {
                     const columns = Array.from(row.querySelectorAll('td'));
