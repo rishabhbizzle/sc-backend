@@ -42,7 +42,10 @@ async function connect() {
 }
 
 connect();
-const client = new Redis(process.env.REDIS_URL);
+console.log('REDIS_URL', process.env.REDIS_URL);
+const client = new Redis(process.env.REDIS_URL).on('connect', () => {
+    console.log('Redis connected successfully');
+})
 
 app.get('/', (req, res) => {
     res.json({
