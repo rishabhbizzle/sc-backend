@@ -302,7 +302,12 @@ app.get('/api/v1/others/getRecomendations', async (req, res) => {
 app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
     try {
         const { limit } = req.query;
+        const cacheData = await getCachedData(`mostStreamedArtists`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
+        client.set(`mostStreamedArtists`, JSON.stringify(data), "EX", 50000);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -314,7 +319,12 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
 app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
     try {
         const { limit } = req?.query;
+        const cacheData = await getCachedData(`mostMonthlyListeners`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
+        client.set(`mostMonthlyListeners`, JSON.stringify(data), "EX", 50000);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -326,7 +336,12 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
 app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
     try {
         const { year } = req?.query;
+        const cacheData = await getCachedData(`mostStreamedSongs-${year}`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const data = await getMostStreamedSongs(year);
+        client.set(`mostStreamedSongs-${year}`, JSON.stringify(data), "EX", 50000);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -337,7 +352,12 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
 
 app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
     try {
+        const cacheData = await getCachedData(`mostStreamedAlbums`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const data = await getMostStreamedAlbums();
+        client.set(`mostStreamedAlbums`, JSON.stringify(data), "EX", 50000);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
