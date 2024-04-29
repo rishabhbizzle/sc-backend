@@ -7,6 +7,8 @@ const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
 const rateLimitMiddleware = require('./utilities/rateLimiter');
+const { Redis } = require("ioredis")
+
 
 app.use(express.json());
 app.use(cors({
@@ -40,6 +42,7 @@ async function connect() {
 }
 
 connect();
+const client = new Redis(process.env.REDIS_URL);
 
 app.get('/', (req, res) => {
     res.json({
@@ -49,11 +52,39 @@ app.get('/', (req, res) => {
 
 require('./cron/controller');
 
+const getCachedData = (key) => {
+    return new Promise((resolve, reject) => {
+        try {
+            client.get(key, (err, data) => {
+                if (err) {
+                    return reject(err);
+                }
+                if (data !== null) {
+                    return resolve(JSON.parse(data));
+                } else {
+                    // If data is null, resolve with null
+                    return resolve(null);
+                }
+            });
+        } catch (error) {
+            // Handle synchronous errors within the try block
+            console.error(error);
+            reject(error); // Reject the Promise
+        }
+    });
+}
+
+
 //kworb
 app.get('/api/v1/daily/songs/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const cacheData = await getCachedData(`daily-songs-${id}`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const artistData = await getArtistSongsDailyData(id);
+        client.set(`daily-songs-${id}`, JSON.stringify(artistData), "EX", 43200);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -65,7 +96,13 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
 app.get('/api/v1/daily/albums/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const cacheData = await getCachedData(`daily-albums-${id}`);
+        if (cacheData) {
+            console.log('cacheData', cacheData);
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const artistData = await getArtistAlbumsDailyData(id);
+        client.set(`daily-albums-${id}`, JSON.stringify(artistData), "EX", 43200);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -76,7 +113,13 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
 app.get('/api/v1/daily/overall/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const cacheData = await getCachedData(`daily-overall-${id}`);
+        if (cacheData) {
+            console.log('cacheData', cacheData);
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const artistData = await getArtistOverallDailyData(id);
+        client.set(`daily-overall-${id}`, JSON.stringify(artistData), "EX", 43200);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -126,7 +169,12 @@ app.get('/api/v1/artist/streams/:id', async (req, res) => {
 app.get('/api/v1/artist/social/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const cacheData = await getCachedData(`social-${id}`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
         const data = await getArtistSocialData(id);
+        client.set(`social-${id}`, JSON.stringify(data), "EX", 43200);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);

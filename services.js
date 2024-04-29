@@ -177,7 +177,6 @@ const getArtistSpotifyApiData = async (id) => {
         // more details about the artist
         let lastFmData;
         try {
-            console.log(process.env.LAST_FM_API_KEY)
             lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${artist.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`)
         } catch (error) {
             console.error(error);

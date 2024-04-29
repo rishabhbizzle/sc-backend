@@ -6,7 +6,11 @@ const Album= require('../models/albumModel');
 const Song  = require('../models/songModel');
 const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
+const { Redis } = require("ioredis")
 
+
+
+const client = new Redis(process.env.REDIS_URL);
 
 const Spotify = SpotifyApi.withClientCredentials(
     process.env.SPOTIFY_CLIENT_ID,
@@ -369,6 +373,8 @@ cron.schedule('35 10 * * *', async () => {
 
         console.log("====== PRIORITY ARTISTS DONE ======")
         console.log("====== RESULTS ======", results)
+
+        await client.flushall()
 
     } catch (error) {
         console.log("cron error", error);
