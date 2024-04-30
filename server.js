@@ -87,7 +87,7 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistSongsDailyData(id);
-        client.set(`daily-songs-${id}`, JSON.stringify(artistData), "EX", 43200);
+        client.set(`daily-songs-${id}`, JSON.stringify(artistData));
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -105,7 +105,7 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistAlbumsDailyData(id);
-        client.set(`daily-albums-${id}`, JSON.stringify(artistData), "EX", 43200);
+        client.set(`daily-albums-${id}`, JSON.stringify(artistData));
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -122,7 +122,7 @@ app.get('/api/v1/daily/overall/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistOverallDailyData(id);
-        client.set(`daily-overall-${id}`, JSON.stringify(artistData), "EX", 43200);
+        client.set(`daily-overall-${id}`, JSON.stringify(artistData));
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -177,7 +177,7 @@ app.get('/api/v1/artist/social/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getArtistSocialData(id);
-        client.set(`social-${id}`, JSON.stringify(data), "EX", 43200);
+        client.set(`social-${id}`, JSON.stringify(data));
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -310,7 +310,7 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
-        client.set(`mostStreamedArtists`, JSON.stringify(data), "EX", 50000);
+        client.set(`mostStreamedArtists`, JSON.stringify(data));
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -327,7 +327,7 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
-        client.set(`mostMonthlyListeners`, JSON.stringify(data), "EX", 50000);
+        client.set(`mostMonthlyListeners`, JSON.stringify(data));
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -344,7 +344,7 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedSongs(year);
-        client.set(`mostStreamedSongs-${year}`, JSON.stringify(data), "EX", 50000);
+        client.set(`mostStreamedSongs-${year}`, JSON.stringify(data));
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -360,7 +360,7 @@ app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedAlbums();
-        client.set(`mostStreamedAlbums`, JSON.stringify(data), "EX", 50000);
+        client.set(`mostStreamedAlbums`, JSON.stringify(data));
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
