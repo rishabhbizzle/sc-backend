@@ -954,6 +954,17 @@ const getMostStreamedAlbumInSingle = async (mode = 'day') => {
 }
 
 
+const getLastFmTopTracks = async (page = 1, limit = 10) => {
+    try {
+        const data = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=chart.gettoptracks&api_key=${process.env.LAST_FM_API_KEY}&format=json&page=${page}&limit=${limit}`)
+        return data?.data?.tracks
+    } catch (error) {
+        console.error(error);
+        throw error
+    }
+}
+
+
 
 
 
@@ -979,5 +990,6 @@ module.exports = {
     getMostStreamedSongsInSingleDay,
     getMostStreamedSongsInSingleWeek,
     getMostStreamedAlbumInSingle,
-    getArtistSocialData
+    getArtistSocialData,
+    getLastFmTopTracks
 }
