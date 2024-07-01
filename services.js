@@ -784,7 +784,7 @@ const getMostStreamedSongsInSingleDay = async (type) => {
         executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
     });
     try {
-        const index = type === "holiday" ? 9 : 8;
+        const index = type === "holiday" ? 10 : 7;
         const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
