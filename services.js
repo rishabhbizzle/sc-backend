@@ -207,11 +207,15 @@ const getArtistMostPopularSongs = async (id) => {
 }
 
 
-const getAlbumData = async (id) => {
+const getAlbumData = async (id, metaData=false) => {
     console.log('fetching album data:', id)
     try {
         const albumDetails = await Spotify.albums.get(id, "US")
-        let streamingData = await Album.findOne({ spotifyId: id })
+
+        let streamingData;
+        if (!metaData) {
+            streamingData = await Album.findOne({ spotifyId: id })
+        }
 
         let lastFmData;
         const artist = albumDetails?.artists[0]?.name
@@ -236,55 +240,59 @@ const getAlbumData = async (id) => {
     }
 }
 
-const getTrackData = async (id) => {
+const getTrackData = async (id, metaData = false) => {
     try {
         console.log('fetching track data:', id)
         const trackDetails = await Spotify.tracks.get(id, "US")
-        const trackFeatures = await Spotify.tracks.audioFeatures(id);
-        // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
-        let streamingData = await Song.findOne({ spotifyId: id })
-        const isrc = trackDetails?.external_ids?.isrc
-        if (isrc) {
-            // get all  version of the track from earliest to latest using updatedAt
-            let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
-            if (allTrackVersions.length > 0) {
-                // maintain the current and collect all key values from dailyStreams obj from the track versions
-                let dailyStreams = {}
+        let trackFeatures
+        let streamingData
+        if (!metaData) {
+            trackFeatures = await Spotify.tracks.audioFeatures(id);
+            streamingData = await Song.findOne({ spotifyId: id })
+            // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
+            const isrc = trackDetails?.external_ids?.isrc
+            if (isrc) {
+                // get all  version of the track from earliest to latest using updatedAt
+                let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
+                if (allTrackVersions.length > 0) {
+                    // maintain the current and collect all key values from dailyStreams obj from the track versions
+                    let dailyStreams = {}
 
-                if (streamingData?.dailyStreams) {
-                    dailyStreams = { ...streamingData.dailyStreams };
+                    if (streamingData?.dailyStreams) {
+                        dailyStreams = { ...streamingData.dailyStreams };
+                    }
+
+                    for (let version of allTrackVersions) {
+                        dailyStreams = { ...dailyStreams, ...version.dailyStreams }
+                    }
+
+                    // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
+                    let latestVersion
+                    const highestStreams = allTrackVersions.reduce((prev, current) => (prev.totalStreams > current.totalStreams) ? prev : current)
+
+                    if (streamingData?.totalStreams) {
+                        // get the obj with highest totalStreams from all versions
+                        latestVersion = highestStreams.totalStreams > streamingData?.totalStreams ? highestStreams : streamingData
+                    } else {
+                        latestVersion = highestStreams
+                    }
+                    streamingData = latestVersion
+
+
+                    dailyStreams = { ...dailyStreams, ...latestVersion.dailyStreams }
+
+                    // sort the dailyStreams obj by date early to latest
+                    const sortedDailyStreams = Object.fromEntries(
+                        Object.entries(dailyStreams)
+                            .sort((a, b) => {
+                                const dateA = new Date(a[0].split('-').reverse().join('-'));
+                                const dateB = new Date(b[0].split('-').reverse().join('-'));
+                                return dateA - dateB;
+                            })
+                    );
+
+                    streamingData.dailyStreams = sortedDailyStreams
                 }
-
-                for (let version of allTrackVersions) {
-                    dailyStreams = { ...dailyStreams, ...version.dailyStreams }
-                }
-
-                // get the latest version of the track by comparing updatedAt of all versions + the already one in streamingData
-                let latestVersion
-                const highestStreams = allTrackVersions.reduce((prev, current) => (prev.totalStreams > current.totalStreams) ? prev : current)
-
-                if (streamingData?.totalStreams) {
-                    // get the obj with highest totalStreams from all versions
-                    latestVersion = highestStreams.totalStreams > streamingData?.totalStreams ? highestStreams : streamingData
-                } else {
-                    latestVersion = highestStreams
-                }
-                streamingData = latestVersion
-
-
-                dailyStreams = { ...dailyStreams, ...latestVersion.dailyStreams }
-
-                // sort the dailyStreams obj by date early to latest
-                const sortedDailyStreams = Object.fromEntries(
-                    Object.entries(dailyStreams)
-                        .sort((a, b) => {
-                            const dateA = new Date(a[0].split('-').reverse().join('-'));
-                            const dateB = new Date(b[0].split('-').reverse().join('-'));
-                            return dateA - dateB;
-                        })
-                );
-
-                streamingData.dailyStreams = sortedDailyStreams
             }
         }
         return { trackDetails, streamingData, trackFeatures }
@@ -964,6 +972,17 @@ const getLastFmTopTracks = async (page = 1, limit = 10) => {
     }
 }
 
+const getTopTracksBasedOnCharts = async (country= null) => {
+    try {
+        const data = await Spotify.playlists.getPlaylist('37i9dQZEVXbMDoHDwVN2tF')
+        return data
+        console.log(data)
+    } catch (error) {
+        console.error(error);
+        throw error
+    }
+}
+
 
 
 
@@ -991,5 +1010,6 @@ module.exports = {
     getMostStreamedSongsInSingleWeek,
     getMostStreamedAlbumInSingle,
     getArtistSocialData,
-    getLastFmTopTracks
+    getLastFmTopTracks,
+    getTopTracksBasedOnCharts
 }
