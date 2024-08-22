@@ -7,6 +7,10 @@ const Artist = require('./models/artistModel');
 const UserFavorite = require('./models/userModel');
 const PriorityArtist = require('./models/priorityArtists');
 const axios = require('axios');
+const qqMusic = require('qq-music-api');
+
+
+
 // Initialize the Spotify API client with client credentials
 
 const Spotify = SpotifyApi.withClientCredentials(
@@ -983,6 +987,16 @@ const getTopTracksBasedOnCharts = async (country= null) => {
     }
 }
 
+const getQQMusicTopTracks = async (limit = 100) => {
+    try {
+        const data = await qqMusic.api('/top', { pageSize: limit })
+        return data
+    } catch (error) {
+        console.error(error);
+        throw error
+    }
+}
+
 
 
 
@@ -1011,5 +1025,6 @@ module.exports = {
     getMostStreamedAlbumInSingle,
     getArtistSocialData,
     getLastFmTopTracks,
-    getTopTracksBasedOnCharts
+    getTopTracksBasedOnCharts,
+    getQQMusicTopTracks
 }

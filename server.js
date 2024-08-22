@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -417,6 +417,18 @@ app.get('/api/v1/charts/lastFmTopTracks', async (req, res) => {
         return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
     }
 });
+
+app.get('/api/v1/charts/qqMusic', async (req, res) => {
+    try {
+        const { limit } = req?.query;
+        const data = await getQQMusicTopTracks(limit);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+    }
+});
+
 
 
 app.get('/api/v1/songs/top', async (req, res) => {
