@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -214,8 +214,8 @@ app.get('/api/v1/album/:id', async (req, res) => {
 
 app.get('/api/v1/others/new-releases', async (req, res) => {
     try {
-        const { id } = req.params;
-        const data = await getNewReleases(id);
+        const { limit } = req?.query;
+        const data = await getNewReleases(limit);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -433,8 +433,30 @@ app.get('/api/v1/charts/qqMusic', async (req, res) => {
 
 app.get('/api/v1/songs/top', async (req, res) => {
     try {
-        const { country } = req?.query;
-        const data = await getTopTracksBasedOnCharts(country);
+        const { country, limit } = req?.query;
+        const data = await getTopTracksBasedOnCharts(country, limit);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+    }
+});
+
+app.get('/api/v1/songs/viral', async (req, res) => {
+    try {
+        const { limit } = req?.query;
+        const data = await getTopViralTracks(limit);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+    }
+});
+
+app.get('/api/v1/songs/viral', async (req, res) => {
+    try {
+        const { limit } = req?.query;
+        const data = await getTopViralTracks(limit);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);

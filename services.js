@@ -306,13 +306,13 @@ const getTrackData = async (id, metaData = false) => {
     }
 }
 
-const getNewReleases = async () => {
+const getNewReleases = async (limit=50) => {
     try {
-        let newReleases = await Spotify.browse.getNewReleases("US", 10)
-        return newReleases
+        const data = await Spotify.playlists.getPlaylistItems( '37i9dQZF1DWXJfnUiYjUKT', 'ES',null, limit)
+        return data
     } catch (error) {
         console.error(error);
-        return []
+        throw error
     }
 }
 
@@ -976,11 +976,20 @@ const getLastFmTopTracks = async (page = 1, limit = 10) => {
     }
 }
 
-const getTopTracksBasedOnCharts = async (country= null) => {
+const getTopTracksBasedOnCharts = async (country= null, limit=50) => {
     try {
-        const data = await Spotify.playlists.getPlaylist('37i9dQZEVXbMDoHDwVN2tF')
+        const data = await Spotify.playlists.getPlaylistItems(country ? country: '37i9dQZEVXbMDoHDwVN2tF', 'ES',null, limit)
         return data
-        console.log(data)
+    } catch (error) {
+        console.error(error);
+        throw error
+    }
+}
+
+const getTopViralTracks = async (limit=50) => {
+    try {
+        const data = await Spotify.playlists.getPlaylistItems( '37i9dQZEVXbLiRSasKsNU9', 'ES',null, limit)
+        return data
     } catch (error) {
         console.error(error);
         throw error
@@ -1026,5 +1035,6 @@ module.exports = {
     getArtistSocialData,
     getLastFmTopTracks,
     getTopTracksBasedOnCharts,
-    getQQMusicTopTracks
+    getQQMusicTopTracks,
+    getTopViralTracks
 }
