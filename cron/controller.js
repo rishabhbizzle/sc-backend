@@ -350,7 +350,7 @@ const storeArtistDiscographyDataInDB = async (artistId) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-cron.schedule('30 11 * * *', async () => {
+cron.schedule('30 12 * * *', async () => {
     console.log("====== CRON EXECUTOR STARTED ======")
     try {
         let results = []
