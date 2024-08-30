@@ -796,7 +796,7 @@ const getMostStreamedSongsInSingleDay = async (type) => {
         executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
     });
     try {
-        const index = type === "holiday" ? 10 : 7;
+        const index = type === "holiday" ? 8 : 7;
         const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
@@ -1007,6 +1007,51 @@ const getQQMusicTopTracks = async (limit = 100) => {
 }
 
 
+const getMostViewedYTVideos = async (year) => {
+    const browser = await puppeteer.launch({
+        args: [
+            "--disable-setuid-sandbox",
+            "--no-sandbox",
+            "--single-process",
+            "--no-zygote",
+        ],
+        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
+    });
+    try {
+        const page = await browser.newPage();
+        const url = year ? `${process.env.DATA_SOURCE}youtube/topvideos${year}.html` : `${process.env.DATA_SOURCE}youtube/topvideos.html`;
+        await page.goto(url);
+        await page.waitForSelector('table');
+        const overallData = await page.evaluate(() => {
+            const tables = document.querySelectorAll('table');
+            if (tables.length > 0) {
+                const table = tables[0];
+                const rows = Array.from(table.querySelectorAll('tr'));
+                return rows?.slice(1, 201)?.map(row => {
+                    const columns = Array.from(row.querySelectorAll('td'));
+
+                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
+
+                    const rowData = {
+                        name: nameText,
+                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                    };
+                    return rowData;
+                });
+            }
+            return null;
+        });
+        return overallData;
+    } catch (error) {
+        console.error(error);
+        throw error
+    } finally {
+        console.log('closing browser')
+        await browser.close();
+    }
+}
+
 
 
 
@@ -1036,5 +1081,6 @@ module.exports = {
     getLastFmTopTracks,
     getTopTracksBasedOnCharts,
     getQQMusicTopTracks,
-    getTopViralTracks
+    getTopViralTracks,
+    getMostViewedYTVideos
 }

@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks, getMostViewedYTVideos } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -49,7 +49,7 @@ const client = new Redis(process.env.REDIS_URL).on('connect', () => {
 
 app.get('/', (req, res) => {
     res.json({
-        message: 'Welcome to Spotracker API!',
+        message: 'Welcome to Statscrave API!',
     });
 });
 
@@ -461,6 +461,23 @@ app.get('/api/v1/songs/viral', async (req, res) => {
     } catch (error) {
         console.error(error);
         return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+    }
+});
+
+app.get('/api/v1/youtube/mostViewedVideos', async (req, res) => {
+    try {
+        const { year } = req?.query;
+        const cacheData = await getCachedData(`mostViewedVideosYT-${year}`);
+        if (cacheData) {
+            return res.status(200).json({ status: 'success', data: cacheData });
+        }
+        const data = await getMostViewedYTVideos(year);
+        client.set(`mostViewedVideosYT-${year}`, JSON.stringify(data));
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
+
     }
 });
 
