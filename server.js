@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks, getMostViewedYTVideos } = require('./services');
+const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks, getMostViewedYTVideos, searchService } = require('./services');
 const port = 4000;
 const cors = require('cors');
 const app = express();
@@ -481,7 +481,32 @@ app.get('/api/v1/youtube/mostViewedVideos', async (req, res) => {
     }
 });
 
+function getRandomCharacter() {
+    try {
+        const charCode = Math.floor(Math.random() * 26) + 97;
+        return String.fromCharCode(charCode)
+    } catch (error) {
+        return null
+    }
+}
 
+app.get('/api/v1/search', async (req, res) => {
+    try {
+        let { search, type } = req.query;
+        search = getRandomCharacter() || 'bieber'
+        if (!search) {
+            return res.status(400).json({ status: 'error', message: 'Please provide a search query' });
+        }
+        if (!type) {
+            return res.status(400).json({ status: 'error', message: 'Please provide a type' });
+        }
+        const data = await searchService(search, type);
+        return res.status(200).json({ status: 'success', success: true, data: { results: data } });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
 
 
 app.use('*', (req, res) => {

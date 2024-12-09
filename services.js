@@ -1053,6 +1053,15 @@ const getMostViewedYTVideos = async (year) => {
 }
 
 
+const searchService = async (searchText, type) => {
+    try {
+        const results = await Spotify.search(searchText, type, 'ES', 10);
+        return results
+    } catch (error) {
+        console.log(error);
+        return null
+    }
+}
 
 
 module.exports = {
@@ -1082,5 +1091,6 @@ module.exports = {
     getTopTracksBasedOnCharts,
     getQQMusicTopTracks,
     getTopViralTracks,
-    getMostViewedYTVideos
+    getMostViewedYTVideos,
+    searchService
 }
