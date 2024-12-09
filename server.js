@@ -492,15 +492,15 @@ function getRandomCharacter() {
 
 app.get('/api/v1/search', async (req, res) => {
     try {
-        let { search, type } = req.query;
-        search = getRandomCharacter() || 'bieber'
-        if (!search) {
+        let { text, type } = req.query;
+        let searchText = text ? text : getRandomCharacter() || 'bieber'
+        if (!searchText) {
             return res.status(400).json({ status: 'error', message: 'Please provide a search query' });
         }
         if (!type) {
             return res.status(400).json({ status: 'error', message: 'Please provide a type' });
         }
-        const data = await searchService(search, type);
+        const data = await searchService(searchText, type);
         return res.status(200).json({ status: 'success', success: true, data: { results: data } });
     } catch (error) {
         console.error(error);
