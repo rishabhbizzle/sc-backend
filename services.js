@@ -298,6 +298,42 @@ const getTrackData = async (id, metaData = false) => {
                     streamingData.dailyStreams = sortedDailyStreams
                 }
             }
+
+            if (!streamingData) {
+                // fetch from external source and transform the data
+                const response = await axios.get(`https://www.mystreamcount.com/api/track/${id}/streams`)
+                if (response?.data?.status === "ready") {
+                    const externalData = response?.data?.data
+
+                    // Transform the data to match our format
+                    const transformedData = {
+                        totalStreams: 0,
+                        dailyStreams: {}
+                    }
+
+                    // Convert and restructure the data
+                    Object.entries(externalData).forEach(([date, stats]) => {
+                        // Validate the data - ignore entries with negative or invalid values
+                        if (!stats || stats?.total < 0 || stats?.daily < 0 || !Number.isFinite(stats?.total) || !Number.isFinite(stats?.daily) || stats?.total < stats?.daily) {
+                            return; // Skip this entry
+                        }
+
+                        // Convert YYYY-MM-DD to DD-MM-YYYY
+                        const [year, month, day] = date.split('-')
+                        const reformattedDate = `${day}-${month}-${year}`
+
+                        // Store daily streams value
+                        transformedData.dailyStreams[reformattedDate] = stats?.daily || 0
+
+                        // Update totalStreams to the latest total
+                        if (stats?.total > transformedData?.totalStreams) {
+                            transformedData.totalStreams = stats?.total
+                        }
+                    })
+
+                    streamingData = transformedData
+                }
+            }
         }
         return { trackDetails, streamingData, trackFeatures }
     } catch (error) {
