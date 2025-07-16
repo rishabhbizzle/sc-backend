@@ -634,10 +634,10 @@ const getMostMonthlyListeners = async (limit = 100) => {
 
                     const rowData = {
                         id: id,
-                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        peak: columns[4] && columns[4].textContent ? columns[4].textContent : null,
+                        name: columns[1] && columns[1].textContent ? columns[1].textContent : null,
+                        total: columns[2] && columns[2].textContent ? columns[2].textContent : null,
+                        daily: columns[3] && columns[3].textContent ? columns[3].textContent : null,
+                        peak: columns[5] && columns[5].textContent ? columns[5].textContent : null,
                     };
                     return rowData;
                 });
