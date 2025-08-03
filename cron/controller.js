@@ -350,8 +350,8 @@ const storeArtistDiscographyDataInDB = async (artistId) => {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Run the cron job at 1:30 PM everyday
-cron.schedule('30 13 * * *', async () => {
+// Run the cron job at 10:30 AM everyday
+cron.schedule('30 10 * * *', async () => {
     console.log("====== CRON EXECUTOR STARTED ======")
     try {
         let results = []
