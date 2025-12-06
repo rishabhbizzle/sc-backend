@@ -20,6 +20,7 @@ const {
 
 // Initialize Clerk client
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+console.log('Clerk client initialized, Secret Key Present:', !!process.env.CLERK_SECRET_KEY, process.env.CLERK_SECRET_KEY);
 
 const verifyClerkToken = async (req, res, next) => {
     try {
