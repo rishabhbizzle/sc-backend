@@ -7,14 +7,48 @@ const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
 const rateLimitMiddleware = require('./utilities/rateLimiter');
-const { Redis } = require("ioredis")
+const { Redis } = require("ioredis");
+const { createClerkClient } = require('@clerk/clerk-sdk-node');
+const {
+    createOrUpdateReview,
+    getReviewsWithStats,
+    toggleReviewLike,
+    getUserReviewForTarget,
+    deleteReview,
+    isValidObjectId
+} = require('./services/reviewServices');
+
+// Initialize Clerk client
+const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+
+const verifyClerkToken = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ status: 'error', message: 'No token provided' });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const payload = await clerkClient.verifyToken(token);
+
+        if (!payload || !payload.sub) {
+            return res.status(401).json({ status: 'error', message: 'Invalid token' });
+        }
+
+        req.userId = payload.sub;
+        next();
+    } catch (error) {
+        console.error('Token verification error:', error);
+        return res.status(401).json({ status: 'error', message: 'Token verification failed' });
+    }
+};
 
 
 app.use(express.json());
 app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech', 'https://statscrave.com', 'https://www.statscrave.com', 'https://statforfans.netlify.app', 'https://www.statforfans.netlify.app']
-  }))
+}))
 
 app.use(rateLimitMiddleware);
 
@@ -508,6 +542,128 @@ app.get('/api/v1/search', async (req, res) => {
     }
 });
 
+
+// POST /api/v1/reviews - Create or update a review
+app.post('/api/v1/reviews', verifyClerkToken, async (req, res) => {
+    try {
+        const { targetId, targetType, rating, reviewText } = req.body;
+
+        if (!targetId || !targetType || !rating) {
+            return res.status(400).json({ status: 'error', message: 'Missing required fields' });
+        }
+
+        const ratingNum = parseInt(rating);
+        if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+            return res.status(400).json({ status: 'error', message: 'Rating must be between 1 and 5' });
+        }
+
+        const review = await createOrUpdateReview(req.userId, targetId, targetType, ratingNum, reviewText);
+
+        return res.status(200).json({
+            message: 'Review submitted successfully',
+            success: true,
+            review,
+        });
+    } catch (error) {
+        console.error('Error submitting review:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
+
+// GET /api/v1/reviews - Get reviews with stats
+app.get('/api/v1/reviews', async (req, res) => {
+    try {
+        const { targetId, page = 1, limit = 25, sort = 'newest' } = req.query;
+
+        if (!targetId) {
+            return res.status(400).json({ status: 'error', message: 'Missing targetId' });
+        }
+
+        const result = await getReviewsWithStats(targetId, parseInt(page), parseInt(limit), sort);
+
+        return res.status(200).json({
+            success: true,
+            ...result
+        });
+    } catch (error) {
+        console.error('Error fetching reviews:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
+
+// POST /api/v1/reviews/:reviewId/like - Toggle like on a review
+app.post('/api/v1/reviews/:reviewId/like', verifyClerkToken, async (req, res) => {
+    try {
+        const { reviewId } = req.params;
+
+        if (!isValidObjectId(reviewId)) {
+            return res.status(400).json({ status: 'error', message: 'Invalid review ID' });
+        }
+
+        const result = await toggleReviewLike(reviewId, req.userId);
+
+        if (!result) {
+            return res.status(404).json({ status: 'error', message: 'Review not found' });
+        }
+
+        return res.status(200).json({
+            success: true,
+            ...result
+        });
+    } catch (error) {
+        console.error('Error toggling like:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
+
+// GET /api/v1/reviews/user - Get current user's review for a target
+app.get('/api/v1/reviews/user', verifyClerkToken, async (req, res) => {
+    try {
+        const { targetId } = req.query;
+
+        if (!targetId) {
+            return res.status(400).json({ status: 'error', message: 'Missing targetId' });
+        }
+
+        const review = await getUserReviewForTarget(req.userId, targetId);
+
+        return res.status(200).json({
+            success: true,
+            review
+        });
+    } catch (error) {
+        console.error('Error fetching user review:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
+
+// DELETE /api/v1/reviews/:reviewId - Delete a review (owner only)
+app.delete('/api/v1/reviews/:reviewId', verifyClerkToken, async (req, res) => {
+    try {
+        const { reviewId } = req.params;
+
+        if (!isValidObjectId(reviewId)) {
+            return res.status(400).json({ status: 'error', message: 'Invalid review ID' });
+        }
+
+        const result = await deleteReview(reviewId, req.userId);
+
+        if (!result.found) {
+            return res.status(404).json({ status: 'error', message: 'Review not found' });
+        }
+        if (!result.authorized) {
+            return res.status(403).json({ status: 'error', message: 'Not authorized to delete this review' });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Review deleted successfully'
+        });
+    } catch (error) {
+        console.error('Error deleting review:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Something went wrong' });
+    }
+});
 
 app.use('*', (req, res) => {
     res.status(404).json({
