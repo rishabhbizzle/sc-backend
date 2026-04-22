@@ -45,6 +45,10 @@ const verifyClerkToken = async (req, res, next) => {
 };
 
 
+// If this service runs behind a reverse proxy / CDN (Vercel, Render, Nginx, Cloudflare),
+// enable `trust proxy` so `req.ip` reflects the real client IP (needed for rate limiting).
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
