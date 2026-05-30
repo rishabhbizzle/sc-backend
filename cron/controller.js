@@ -10,7 +10,10 @@ const { Redis } = require("ioredis")
 
 
 
-const client = new Redis(process.env.REDIS_URL);
+const client = new Redis(process.env.REDIS_URL)
+    .on('error', (err) => {
+        console.error('Redis (cron) error:', err?.message);
+    });
 
 const Spotify = SpotifyApi.withClientCredentials(
     process.env.SPOTIFY_CLIENT_ID,

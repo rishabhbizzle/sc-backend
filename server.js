@@ -20,7 +20,6 @@ const {
 
 // Initialize Clerk client
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
-console.log('Clerk client initialized, Secret Key Present:', !!process.env.CLERK_SECRET_KEY, process.env.CLERK_SECRET_KEY);
 
 const verifyClerkToken = async (req, res, next) => {
     try {
@@ -82,9 +81,13 @@ async function connect() {
 
 connect();
 console.log('REDIS_URL', process.env.REDIS_URL);
-const client = new Redis(process.env.REDIS_URL).on('connect', () => {
-    console.log('Redis connected successfully');
-})
+const client = new Redis(process.env.REDIS_URL)
+    .on('connect', () => {
+        console.log('Redis connected successfully');
+    })
+    .on('error', (err) => {
+        console.error('Redis client error:', err?.message);
+    });
 
 app.get('/', (req, res) => {
     res.json({
@@ -95,26 +98,42 @@ app.get('/', (req, res) => {
 require('./cron/controller');
 
 const getCachedData = (key) => {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         try {
             client.get(key, (err, data) => {
                 if (err) {
-                    return reject(err);
+                    // Treat any Redis error (e.g. quota/connection) as a cache miss
+                    // so the route falls back to fetching fresh data instead of 500ing.
+                    console.error('Redis get failed:', err?.message);
+                    return resolve(null);
                 }
                 if (data !== null) {
-                    return resolve(JSON.parse(data));
+                    try {
+                        return resolve(JSON.parse(data));
+                    } catch (parseError) {
+                        // Corrupt cache entry shouldn't break the request either.
+                        console.error('Redis cache parse failed:', parseError?.message);
+                        return resolve(null);
+                    }
                 } else {
                     // If data is null, resolve with null
                     return resolve(null);
                 }
             });
         } catch (error) {
-            // Handle synchronous errors within the try block
-            console.error(error);
-            reject(error); // Reject the Promise
+            // Handle synchronous errors within the try block as a cache miss
+            console.error('Redis get failed:', error?.message);
+            resolve(null);
         }
     });
 }
+
+const setCachedData = (key, value) => {
+    // fire-and-forget; never let a cache-write failure affect the response
+    return client.set(key, JSON.stringify(value)).catch((err) => {
+        console.error('Redis set failed:', err?.message);
+    });
+};
 
 
 //kworb
@@ -126,7 +145,7 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistSongsDailyData(id);
-        client.set(`daily-songs-${id}`, JSON.stringify(artistData));
+        setCachedData(`daily-songs-${id}`, artistData);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -144,7 +163,7 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistAlbumsDailyData(id);
-        client.set(`daily-albums-${id}`, JSON.stringify(artistData));
+        setCachedData(`daily-albums-${id}`, artistData);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -161,7 +180,7 @@ app.get('/api/v1/daily/overall/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistOverallDailyData(id);
-        client.set(`daily-overall-${id}`, JSON.stringify(artistData));
+        setCachedData(`daily-overall-${id}`, artistData);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -216,7 +235,7 @@ app.get('/api/v1/artist/social/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getArtistSocialData(id);
-        client.set(`social-${id}`, JSON.stringify(data));
+        setCachedData(`social-${id}`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -351,7 +370,7 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
-        client.set(`mostStreamedArtists`, JSON.stringify(data));
+        setCachedData(`mostStreamedArtists`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -368,7 +387,7 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
-        client.set(`mostMonthlyListeners`, JSON.stringify(data));
+        setCachedData(`mostMonthlyListeners`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -385,7 +404,7 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedSongs(year);
-        client.set(`mostStreamedSongs-${year}`, JSON.stringify(data));
+        setCachedData(`mostStreamedSongs-${year}`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -401,7 +420,7 @@ app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedAlbums();
-        client.set(`mostStreamedAlbums`, JSON.stringify(data));
+        setCachedData(`mostStreamedAlbums`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -511,7 +530,7 @@ app.get('/api/v1/youtube/mostViewedVideos', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostViewedYTVideos(year);
-        client.set(`mostViewedVideosYT-${year}`, JSON.stringify(data));
+        setCachedData(`mostViewedVideosYT-${year}`, data);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
