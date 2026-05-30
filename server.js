@@ -51,7 +51,7 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech', 'https://statscrave.com', 'https://www.statscrave.com', 'https://statforfans.netlify.app', 'https://www.statforfans.netlify.app', 'https://statscrave-git-feat-theme-bizzxles-projects.vercel.app', 'https://statscrave-git-development-bizzxles-projects.vercel.app']
+    origin: ['http://localhost:3000', 'https://spotracker.tech', 'https://www.spotracker.tech', 'https://statscrave.com', 'https://www.statscrave.com', 'https://statforfans.netlify.app', 'https://www.statforfans.netlify.app', 'https://statscrave-git-feat-theme-bizzxles-projects.vercel.app', 'https://statscrave-git-development-bizzxles-projects.vercel.app', 'statscrave-production.up.railway.app']
 }))
 
 app.use(rateLimitMiddleware);
