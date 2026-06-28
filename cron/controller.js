@@ -1,19 +1,11 @@
 const cron = require('node-cron');
 require('dotenv').config();
-const puppeteer = require('puppeteer');
+const { withPage } = require('../utilities/browser');
 const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
 const Album= require('../models/albumModel');
 const Song  = require('../models/songModel');
 const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
-const { Redis } = require("ioredis")
-
-
-
-const client = new Redis(process.env.REDIS_URL)
-    .on('error', (err) => {
-        console.error('Redis (cron) error:', err?.message);
-    });
 
 const Spotify = SpotifyApi.withClientCredentials(
     process.env.SPOTIFY_CLIENT_ID,
@@ -28,10 +20,8 @@ function formatDate(date) {
 }
 
 
-const storeArtistSongsDataInDB = async (artistId, browser) => {
+const storeArtistSongsDataInDB = async (artistId, page) => {
     try {
-        const page = await browser.newPage();
-
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
 
         await page.goto(url);
@@ -124,9 +114,8 @@ const storeArtistSongsDataInDB = async (artistId, browser) => {
 
 }
 
-const storeArtistOverallDataInDB = async (artistId, browser) => {
+const storeArtistOverallDataInDB = async (artistId, page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -156,6 +145,7 @@ const storeArtistOverallDataInDB = async (artistId, browser) => {
         today.setDate(today.getDate() - 2);
         const formattedDate = formatDate(today);
         // now store the artist data in the database
+        console.log("====== TABLE DATA ======", tableData)
         if (tableData) {
             let artistData = await Spotify.artists.get(artistId);
             console.log(artistData);
@@ -194,6 +184,7 @@ const storeArtistOverallDataInDB = async (artistId, browser) => {
                     dailyFeatureStreams: dailyFeatureStreamsObj,
                     image: artistData?.images?.length > 0 ? artistData?.images[0]?.url : null
                 }
+                console.log("====== NEW DATA ======", newData)
                 await Artist.updateOne({ spotifyId: artistId }, newData);
 
 
@@ -237,9 +228,8 @@ const storeArtistOverallDataInDB = async (artistId, browser) => {
 }
 
 
-const storeArtistAlbumsDataInDB = async (artistId, browser) => {
+const storeArtistAlbumsDataInDB = async (artistId, page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_albums.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -330,17 +320,9 @@ const storeArtistAlbumsDataInDB = async (artistId, browser) => {
 
 const storeArtistDiscographyDataInDB = async (artistId) => {
     try {
-        const browser = await puppeteer.launch({
-            args: [
-                "--disable-setuid-sandbox",
-                "--no-sandbox",
-            ],
-            executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-        });
-        const overall = await storeArtistOverallDataInDB(artistId, browser);
-        const albums = await storeArtistAlbumsDataInDB(artistId, browser);
-        const songs = await storeArtistSongsDataInDB(artistId, browser);
-        await browser.close();
+        const overall = await withPage(page => storeArtistOverallDataInDB(artistId, page));
+        const albums = await withPage(page => storeArtistAlbumsDataInDB(artistId, page));
+        const songs = await withPage(page => storeArtistSongsDataInDB(artistId, page));
         return {
             overall,
             albums,
@@ -354,7 +336,7 @@ const storeArtistDiscographyDataInDB = async (artistId) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Run the cron job at 10:30 AM everyday
-cron.schedule('30 10 * * *', async () => {
+cron.schedule('22 02 * * *', async () => {
     console.log("====== CRON EXECUTOR STARTED ======")
     try {
         let results = []
@@ -377,8 +359,6 @@ cron.schedule('30 10 * * *', async () => {
 
         console.log("====== PRIORITY ARTISTS DONE ======")
         console.log("====== RESULTS ======", results)
-
-        await client.flushall()
 
     } catch (error) {
         console.log("cron error", error);

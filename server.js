@@ -6,7 +6,8 @@ const port = 4000;
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
-const rateLimitMiddleware = require('./utilities/rateLimiter');
+const { rateLimitMiddleware, heavyRateLimitMiddleware } = require('./utilities/rateLimiter');
+const { closeBrowser } = require('./utilities/browser');
 const { Redis } = require("ioredis");
 const { createClerkClient } = require('@clerk/clerk-sdk-node');
 const {
@@ -61,7 +62,8 @@ async function connect() {
         mongoose.connect(process.env.MONGO_URI, {
             dbName: 'prod',
             useNewUrlParser: true,
-            useUnifiedTopology: true
+            useUnifiedTopology: true,
+            maxPoolSize: 10
         });
         const connection = mongoose.connection;
         connection.on('connected', () => {
@@ -128,16 +130,27 @@ const getCachedData = (key) => {
     });
 }
 
-const setCachedData = (key, value) => {
-    // fire-and-forget; never let a cache-write failure affect the response
-    return client.set(key, JSON.stringify(value)).catch((err) => {
+// Cache TTLs (seconds). Daily-scraped data refreshes a few times a day;
+// leaderboards/social change slowly, so they live longer.
+const SIX_HOURS = 6 * 60 * 60;
+const TWELVE_HOURS = 12 * 60 * 60;
+
+const setCachedData = (key, value, ttlSeconds) => {
+    // fire-and-forget; never let a cache-write failure affect the response.
+    // A TTL lets each key refresh on its own schedule instead of relying on a
+    // daily flushall (which caused a thundering herd of scrapes right after it).
+    const payload = JSON.stringify(value);
+    const writePromise = ttlSeconds
+        ? client.set(key, payload, 'EX', ttlSeconds)
+        : client.set(key, payload);
+    return writePromise.catch((err) => {
         console.error('Redis set failed:', err?.message);
     });
 };
 
 
 //kworb
-app.get('/api/v1/daily/songs/:id', async (req, res) => {
+app.get('/api/v1/daily/songs/:id', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const cacheData = await getCachedData(`daily-songs-${id}`);
@@ -145,7 +158,7 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistSongsDailyData(id);
-        setCachedData(`daily-songs-${id}`, artistData);
+        setCachedData(`daily-songs-${id}`, artistData, SIX_HOURS);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -154,7 +167,7 @@ app.get('/api/v1/daily/songs/:id', async (req, res) => {
     }
 });
 
-app.get('/api/v1/daily/albums/:id', async (req, res) => {
+app.get('/api/v1/daily/albums/:id', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const cacheData = await getCachedData(`daily-albums-${id}`);
@@ -163,7 +176,7 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistAlbumsDailyData(id);
-        setCachedData(`daily-albums-${id}`, artistData);
+        setCachedData(`daily-albums-${id}`, artistData, SIX_HOURS);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -171,7 +184,7 @@ app.get('/api/v1/daily/albums/:id', async (req, res) => {
     }
 });
 
-app.get('/api/v1/daily/overall/:id', async (req, res) => {
+app.get('/api/v1/daily/overall/:id', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const cacheData = await getCachedData(`daily-overall-${id}`);
@@ -180,7 +193,7 @@ app.get('/api/v1/daily/overall/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const artistData = await getArtistOverallDailyData(id);
-        setCachedData(`daily-overall-${id}`, artistData);
+        setCachedData(`daily-overall-${id}`, artistData, SIX_HOURS);
         return res.status(200).json({ status: 'success', data: artistData });
     } catch (error) {
         console.error(error);
@@ -227,7 +240,7 @@ app.get('/api/v1/artist/streams/:id', async (req, res) => {
     }
 });
 
-app.get('/api/v1/artist/social/:id', async (req, res) => {
+app.get('/api/v1/artist/social/:id', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { id } = req.params;
         const cacheData = await getCachedData(`social-${id}`);
@@ -235,7 +248,7 @@ app.get('/api/v1/artist/social/:id', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getArtistSocialData(id);
-        setCachedData(`social-${id}`, data);
+        setCachedData(`social-${id}`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -362,7 +375,7 @@ app.get('/api/v1/others/getRecomendations', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
+app.get('/api/v1/others/mostStreamedArtists', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { limit } = req.query;
         const cacheData = await getCachedData(`mostStreamedArtists`);
@@ -370,7 +383,7 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
-        setCachedData(`mostStreamedArtists`, data);
+        setCachedData(`mostStreamedArtists`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -379,7 +392,7 @@ app.get('/api/v1/others/mostStreamedArtists', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
+app.get('/api/v1/others/mostMonthlyListeners', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { limit } = req?.query;
         const cacheData = await getCachedData(`mostMonthlyListeners`);
@@ -387,7 +400,7 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
-        setCachedData(`mostMonthlyListeners`, data);
+        setCachedData(`mostMonthlyListeners`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -396,7 +409,7 @@ app.get('/api/v1/others/mostMonthlyListeners', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
+app.get('/api/v1/others/mostStreamedSongs', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { year } = req?.query;
         const cacheData = await getCachedData(`mostStreamedSongs-${year}`);
@@ -404,7 +417,7 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedSongs(year);
-        setCachedData(`mostStreamedSongs-${year}`, data);
+        setCachedData(`mostStreamedSongs-${year}`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -413,14 +426,14 @@ app.get('/api/v1/others/mostStreamedSongs', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
+app.get('/api/v1/others/mostStreamedAlbums', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const cacheData = await getCachedData(`mostStreamedAlbums`);
         if (cacheData) {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostStreamedAlbums();
-        setCachedData(`mostStreamedAlbums`, data);
+        setCachedData(`mostStreamedAlbums`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -429,7 +442,7 @@ app.get('/api/v1/others/mostStreamedAlbums', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedSongsInSingleDay', async (req, res) => {
+app.get('/api/v1/others/mostStreamedSongsInSingleDay', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { type } = req?.query;
         const data = await getMostStreamedSongsInSingleDay(type);
@@ -441,7 +454,7 @@ app.get('/api/v1/others/mostStreamedSongsInSingleDay', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedSongsInSingleWeek', async (req, res) => {
+app.get('/api/v1/others/mostStreamedSongsInSingleWeek', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const data = await getMostStreamedSongsInSingleWeek();
         return res.status(200).json({ status: 'success', data: data });
@@ -452,7 +465,7 @@ app.get('/api/v1/others/mostStreamedSongsInSingleWeek', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedAlbumsInSingle', async (req, res) => {
+app.get('/api/v1/others/mostStreamedAlbumsInSingle', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { mode } = req?.query;
         const data = await getMostStreamedAlbumInSingle(mode);
@@ -522,7 +535,7 @@ app.get('/api/v1/songs/viral', async (req, res) => {
     }
 });
 
-app.get('/api/v1/youtube/mostViewedVideos', async (req, res) => {
+app.get('/api/v1/youtube/mostViewedVideos', heavyRateLimitMiddleware, async (req, res) => {
     try {
         const { year } = req?.query;
         const cacheData = await getCachedData(`mostViewedVideosYT-${year}`);
@@ -530,7 +543,7 @@ app.get('/api/v1/youtube/mostViewedVideos', async (req, res) => {
             return res.status(200).json({ status: 'success', data: cacheData });
         }
         const data = await getMostViewedYTVideos(year);
-        setCachedData(`mostViewedVideosYT-${year}`, data);
+        setCachedData(`mostViewedVideosYT-${year}`, data, TWELVE_HOURS);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
@@ -696,4 +709,19 @@ app.use('*', (req, res) => {
 });
 
 
-app.listen(port, () => console.log(`App listening on port ${port}!`));
+const server = app.listen(port, () => console.log(`App listening on port ${port}!`));
+
+// Graceful shutdown: close the shared Chromium so its child processes don't
+// orphan and pin memory across restarts, then drain Redis and Mongo.
+async function shutdown(signal) {
+    console.log(`Received ${signal}, shutting down gracefully...`);
+    // Hard-exit if cleanup hangs so the process never gets stuck on restart.
+    setTimeout(() => process.exit(1), 10000).unref();
+    try { server.close(); } catch (_) { /* ignore */ }
+    try { await closeBrowser(); } catch (_) { /* ignore */ }
+    try { await client.quit(); } catch (_) { /* ignore */ }
+    try { await mongoose.connection.close(); } catch (_) { /* ignore */ }
+    process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

@@ -1,5 +1,5 @@
 require('dotenv').config();
-const puppeteer = require('puppeteer');
+const { withPage } = require('./utilities/browser');
 const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
 const Album = require('./models/albumModel');
 const Song = require('./models/songModel');
@@ -21,17 +21,8 @@ const Spotify = SpotifyApi.withClientCredentials(
 
 
 const getArtistSongsDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -61,28 +52,17 @@ const getArtistSongsDailyData = async (artistId) => {
             }
             return null;
         });
-        await browser.close();
         return songsData;
     } catch (error) {
         console.error(error);
-        await browser.close();
         return []
     }
-
+    });
 }
 
 const getArtistAlbumsDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_albums.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -118,24 +98,14 @@ const getArtistAlbumsDailyData = async (artistId) => {
     } catch (error) {
         console.error(error);
         return []
-    } finally {
-        await browser.close();
     }
+    });
 }
 
 
 const getArtistOverallDailyData = async (artistId) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -163,9 +133,8 @@ const getArtistOverallDailyData = async (artistId) => {
     } catch (error) {
         console.error(error);
         return []
-    } finally {
-        await browser.close();
     }
+    });
 }
 
 function removeAnchorTag(summary) {
@@ -232,7 +201,7 @@ const getAlbumData = async (id, metaData = false) => {
 
         let streamingData;
         if (!metaData) {
-            streamingData = await Album.findOne({ spotifyId: id })
+            streamingData = await Album.findOne({ spotifyId: id }).lean()
         }
 
         let lastFmData;
@@ -266,12 +235,12 @@ const getTrackData = async (id, metaData = false) => {
         let streamingData
         if (!metaData) {
             trackFeatures = await Spotify.tracks.audioFeatures(id);
-            streamingData = await Song.findOne({ spotifyId: id })
+            streamingData = await Song.findOne({ spotifyId: id }).lean()
             // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
             const isrc = trackDetails?.external_ids?.isrc
             if (isrc) {
                 // get all  version of the track from earliest to latest using updatedAt
-                let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 })
+                let allTrackVersions = await Song.find({ isrc: isrc }).sort({ updatedAt: -1 }).lean()
                 if (allTrackVersions.length > 0) {
                     // maintain the current and collect all key values from dailyStreams obj from the track versions
                     let dailyStreams = {}
@@ -332,7 +301,7 @@ const getNewReleases = async (limit = 50) => {
 
 const getArtistStreamingData = async (id) => {
     try {
-        const streamingData = await Artist.findOne({ spotifyId: id })
+        const streamingData = await Artist.findOne({ spotifyId: id }).lean()
         return streamingData
     } catch (error) {
         console.error(error);
@@ -341,22 +310,13 @@ const getArtistStreamingData = async (id) => {
 }
 
 const getArtistSocialData = async (id) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
     try {
         const data = await PriorityArtist.findOne({ spotifyId: id })
 
         if (!data?.cmId) {
             return null
         }
-        const page = await browser.newPage();
+        return await withPage(async (page) => {
         // Replace the URL with the URL of the webpage you want to scrape
         await page.goto(`https://app.chartmetric.com/artist/${data?.cmId}`, { waitUntil: 'domcontentloaded' });
 
@@ -448,12 +408,11 @@ const getArtistSocialData = async (id) => {
         });
 
         return { socialSummary: summaryStats, socialFootprint: socialFootprint };
+        });
 
     } catch (error) {
         console.log('error from getArtistSocialdata:', id, error);
         return null
-    } finally {
-        await browser.close();
     }
 
 }
@@ -461,7 +420,7 @@ const getArtistSocialData = async (id) => {
 
 const getUserFavourites = async (kindeId) => {
     try {
-        let userFavourites = await UserFavorite.find({ kindeId: kindeId })
+        let userFavourites = await UserFavorite.find({ kindeId: kindeId }).lean()
         // divide the favourites into types
         let artistFavourites = userFavourites.filter(fav => fav.type === "artist")
         let albumFavourites = userFavourites.filter(fav => fav.type === "album")
@@ -529,7 +488,7 @@ const getDashboardArtistRankingData = async (userId) => {
 
 const isUserFavorite = async (type, spotifyId, id) => {
     try {
-        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId })
+        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId }).lean()
         if (userFavourite) {
             return true
         }
@@ -569,17 +528,8 @@ const getRecomendations = async (type) => {
 
 const getMostStreamedArtists = async (limit) => {
     console.log('fetching most streamed artists')
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/artists.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -612,25 +562,15 @@ const getMostStreamedArtists = async (limit) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        await browser.close();
     }
+    });
 }
 
 
 const getMostMonthlyListeners = async (limit = 100) => {
     console.log('fetching most streamed artists')
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/listeners.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -662,24 +602,13 @@ const getMostMonthlyListeners = async (limit = 100) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 const getMostStreamedSongs = async (year) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = year ? `${process.env.DATA_SOURCE}spotify/songs_${year}.html` : `${process.env.DATA_SOURCE}spotify/songs.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -715,24 +644,13 @@ const getMostStreamedSongs = async (year) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 const getMostStreamedAlbums = async (year) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `${process.env.DATA_SOURCE}spotify/albums.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -768,22 +686,20 @@ const getMostStreamedAlbums = async (year) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 const markFavourite = async (id, type, spotifyId, image, name) => {
     try {
-        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId })
+        let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId }).lean()
         if (userFavourite) {
             await UserFavorite.deleteOne({ kindeId: id, type: type, spotifyId: spotifyId })
             return { message: "Removed from favourites", type: "success" }
         } else {
             // check if user has already added 5 favourites of artist type if yes dont add more
             if (type === "artist") {
-                let artistFavourites = await UserFavorite.find({ kindeId: id, type: type })
+                let artistFavourites = await UserFavorite.find({ kindeId: id, type: type }).lean()
                 if (artistFavourites.length >= 5) {
                     throw new Error("You can only add upto 5 favourite artists")
                 }
@@ -800,18 +716,9 @@ const markFavourite = async (id, type, spotifyId, image, name) => {
 
 
 const getMostStreamedSongsInSingleDay = async (type) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
         const index = type === "holiday" ? 8 : 7;
-        const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -853,24 +760,13 @@ const getMostStreamedSongsInSingleDay = async (type) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 const getMostStreamedSongsInSingleWeek = async () => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -912,24 +808,13 @@ const getMostStreamedSongsInSingleWeek = async () => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 const getMostStreamedAlbumInSingle = async (mode = 'day') => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -973,10 +858,8 @@ const getMostStreamedAlbumInSingle = async (mode = 'day') => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 
@@ -1022,17 +905,8 @@ const getQQMusicTopTracks = async (limit = 100) => {
 
 
 const getMostViewedYTVideos = async (year) => {
-    const browser = await puppeteer.launch({
-        args: [
-            "--disable-setuid-sandbox",
-            "--no-sandbox",
-            "--single-process",
-            "--no-zygote",
-        ],
-        executablePath: process.env.PRODUCTION == 'true' ? process.env.PUPPETEER_EXECUTABLE_PATH : puppeteer.executablePath(),
-    });
+    return withPage(async (page) => {
     try {
-        const page = await browser.newPage();
         const url = year ? `${process.env.DATA_SOURCE}youtube/topvideos${year}.html` : `${process.env.DATA_SOURCE}youtube/topvideos.html`;
         await page.goto(url);
         await page.waitForSelector('table');
@@ -1060,10 +934,8 @@ const getMostViewedYTVideos = async (year) => {
     } catch (error) {
         console.error(error);
         throw error
-    } finally {
-        console.log('closing browser')
-        await browser.close();
     }
+    });
 }
 
 
