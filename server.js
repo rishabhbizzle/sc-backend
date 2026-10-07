@@ -7,7 +7,12 @@ const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
 const { rateLimitMiddleware, heavyRateLimitMiddleware } = require('./utilities/rateLimiter');
-const { closeBrowser } = require('./utilities/browser');
+const browserPool = require('./utilities/browser');
+const { closeBrowser } = browserPool;
+const httpClient = require('./utilities/http');
+const { positiveIntEnv } = require('./utilities/semaphore');
+const cronController = require('./cron/controller');
+const { WikipediaLayoutError } = require('./scrapers/wikipedia');
 const { Redis } = require("ioredis");
 const { createClerkClient } = require('@clerk/clerk-sdk-node');
 const {
@@ -57,22 +62,40 @@ app.use(cors({
 
 app.use(rateLimitMiddleware);
 
+// Backstop: no request may sit open longer than the reverse proxy will wait
+// (nginx gives up at 120s). Scrapes finish in seconds now; this only catches
+// something unexpected and turns it into a clear 503 instead of a silent 504.
+const REQUEST_TIMEOUT_MS = positiveIntEnv(process.env.REQUEST_TIMEOUT_MS, 100000);
+app.use((req, res, next) => {
+    res.setTimeout(REQUEST_TIMEOUT_MS, () => {
+        if (!res.headersSent) {
+            res.status(503).json({ status: 'error', message: `Request timed out after ${REQUEST_TIMEOUT_MS}ms` });
+        }
+    });
+    next();
+});
+
 async function connect() {
     try {
         mongoose.connect(process.env.MONGO_URI, {
             dbName: 'prod',
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            maxPoolSize: 10
+            maxPoolSize: 10,
+            serverSelectionTimeoutMS: 15000,
+        }).catch((err) => {
+            console.error('MongoDB initial connection failed:', err?.message);
         });
         const connection = mongoose.connection;
+        let everConnected = false;
         connection.on('connected', () => {
+            everConnected = true;
             console.log('MongoDB connected successfully');
         })
 
         connection.on('error', (err) => {
-            console.log('MongoDB connection error. Please make sure MongoDB is running. ' + err);
-            process.exit();
+            console.error('MongoDB connection error: ' + err);
+            // Mongoose reconnects on its own once it has connected; only give up
+            // (and let pm2 restart us) if the very first connection never happened.
+            if (!everConnected) process.exit(1);
         })
 
     } catch (error) {
@@ -82,8 +105,14 @@ async function connect() {
 }
 
 connect();
-console.log('REDIS_URL', process.env.REDIS_URL);
-const client = new Redis(process.env.REDIS_URL)
+const client = new Redis(process.env.REDIS_URL, {
+    // A stuck or quota-limited Redis must never hang a request: time commands
+    // out quickly and treat any failure as a cache miss.
+    connectTimeout: 10000,
+    commandTimeout: 3000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+})
     .on('connect', () => {
         console.log('Redis connected successfully');
     })
@@ -97,41 +126,24 @@ app.get('/', (req, res) => {
     });
 });
 
-require('./cron/controller');
+cronController.start();
 
-const getCachedData = (key) => {
-    return new Promise((resolve) => {
-        try {
-            client.get(key, (err, data) => {
-                if (err) {
-                    // Treat any Redis error (e.g. quota/connection) as a cache miss
-                    // so the route falls back to fetching fresh data instead of 500ing.
-                    console.error('Redis get failed:', err?.message);
-                    return resolve(null);
-                }
-                if (data !== null) {
-                    try {
-                        return resolve(JSON.parse(data));
-                    } catch (parseError) {
-                        // Corrupt cache entry shouldn't break the request either.
-                        console.error('Redis cache parse failed:', parseError?.message);
-                        return resolve(null);
-                    }
-                } else {
-                    // If data is null, resolve with null
-                    return resolve(null);
-                }
-            });
-        } catch (error) {
-            // Handle synchronous errors within the try block as a cache miss
-            console.error('Redis get failed:', error?.message);
-            resolve(null);
-        }
-    });
-}
+// Redis cache helpers. Any Redis problem is a cache miss, never an error.
+const getCachedEntry = async (key) => {
+    try {
+        const raw = await client.get(key);
+        if (raw === null || raw === undefined) return { found: false };
+        return { found: true, value: JSON.parse(raw) };
+    } catch (error) {
+        console.error('Redis get failed:', error?.message);
+        return { found: false };
+    }
+};
 
 // Cache TTLs (seconds). Daily-scraped data refreshes a few times a day;
-// leaderboards/social change slowly, so they live longer.
+// leaderboards/records change slowly, so they live longer.
+const FIVE_MINUTES = 5 * 60;
+const ONE_HOUR = 60 * 60;
 const SIX_HOURS = 6 * 60 * 60;
 const TWELVE_HOURS = 12 * 60 * 60;
 
@@ -148,57 +160,99 @@ const setCachedData = (key, value, ttlSeconds) => {
     });
 };
 
+// Serve from cache, otherwise run `fetcher` and cache its result. Empty
+// results (null / []) are cached for `negativeTtl` only, so a kworb 404 or a
+// temporarily empty table does not stick for the full TTL.
+const withCache = async (key, ttlSeconds, fetcher, { negativeTtl = FIVE_MINUTES } = {}) => {
+    const cached = await getCachedEntry(key);
+    if (cached.found) return cached.value;
+    const value = await fetcher();
+    const isEmpty = value == null || (Array.isArray(value) && value.length === 0);
+    setCachedData(key, value, isEmpty ? negativeTtl : ttlSeconds);
+    return value;
+};
 
-//kworb
-app.get('/api/v1/daily/songs/:id', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const cacheData = await getCachedData(`daily-songs-${id}`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
+const sendJson = (res, status, body) => {
+    if (res.headersSent) return;
+    res.status(status).json(body);
+};
+
+// Maps scraper failures to honest status codes: 503 when the upstream site or
+// the browser pool is busy/unavailable (nothing is cached, the client may
+// retry), 502 when Wikipedia's layout changed and the parser needs attention.
+const sendError = (res, error) => {
+    const message = error?.message || 'Something went wrong';
+    const name = error?.name;
+    if (name === 'UpstreamUnavailableError' || name === 'SemaphoreTimeoutError' || name === 'BrowserTimeoutError') {
+        console.warn('Upstream unavailable:', message);
+        return sendJson(res, 503, { status: 'error', message: 'Upstream data source is temporarily unavailable, please retry shortly', detail: message });
+    }
+    if (error instanceof WikipediaLayoutError) {
+        console.error('Wikipedia layout changed:', message);
+        return sendJson(res, 502, { status: 'error', message: 'Records source layout changed; this list needs a parser update', detail: message });
+    }
+    console.error(error);
+    return sendJson(res, 500, { status: 'error', message });
+};
+
+
+// ---------------------------------------------------------------------------
+// kworb + Wikipedia routes. All of these fetch static HTML over plain HTTP
+// (see scrapers/) and sit behind the Redis cache.
+// ---------------------------------------------------------------------------
+const cachedJsonRoute = (path, { key, ttl, negativeTtl, fetch, heavy = true }) => {
+    const middlewares = heavy ? [heavyRateLimitMiddleware] : [];
+    app.get(path, ...middlewares, async (req, res) => {
+        try {
+            const data = await withCache(key(req), ttl, () => fetch(req), { negativeTtl });
+            return sendJson(res, 200, { status: 'success', data });
+        } catch (error) {
+            return sendError(res, error);
         }
-        const artistData = await getArtistSongsDailyData(id);
-        setCachedData(`daily-songs-${id}`, artistData, SIX_HOURS);
-        return res.status(200).json({ status: 'success', data: artistData });
+    });
+};
+
+cachedJsonRoute('/api/v1/daily/songs/:id', { key: (r) => `daily-songs-${r.params.id}`, ttl: SIX_HOURS, fetch: (r) => getArtistSongsDailyData(r.params.id) });
+cachedJsonRoute('/api/v1/daily/albums/:id', { key: (r) => `daily-albums-${r.params.id}`, ttl: SIX_HOURS, fetch: (r) => getArtistAlbumsDailyData(r.params.id) });
+cachedJsonRoute('/api/v1/daily/overall/:id', { key: (r) => `daily-overall-${r.params.id}`, ttl: SIX_HOURS, fetch: (r) => getArtistOverallDailyData(r.params.id) });
+// Social stats are null while the Chartmetric scrape is disabled (see services.js);
+// the null is cached for an hour so the artist page never waits on it.
+cachedJsonRoute('/api/v1/artist/social/:id', { key: (r) => `social-${r.params.id}`, ttl: TWELVE_HOURS, negativeTtl: ONE_HOUR, fetch: (r) => getArtistSocialData(r.params.id) });
+// The leaderboards always return the top 100; honouring a `limit` query would
+// let one caller poison the shared cache key with a shorter list.
+cachedJsonRoute('/api/v1/others/mostStreamedArtists', { key: () => 'mostStreamedArtists', ttl: TWELVE_HOURS, fetch: () => getMostStreamedArtists() });
+cachedJsonRoute('/api/v1/others/mostMonthlyListeners', { key: () => 'mostMonthlyListeners', ttl: TWELVE_HOURS, fetch: () => getMostMonthlyListeners() });
+cachedJsonRoute('/api/v1/others/mostStreamedSongs', { key: (r) => `mostStreamedSongs-${r.query.year || 'all'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostStreamedSongs(r.query.year) });
+cachedJsonRoute('/api/v1/others/mostStreamedAlbums', { key: () => 'mostStreamedAlbums', ttl: TWELVE_HOURS, fetch: () => getMostStreamedAlbums() });
+cachedJsonRoute('/api/v1/others/mostStreamedSongsInSingleDay', { key: (r) => `records-songs-day-${r.query.type === 'holiday' ? 'holiday' : 'all'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostStreamedSongsInSingleDay(r.query.type) });
+cachedJsonRoute('/api/v1/others/mostStreamedSongsInSingleWeek', { key: () => 'records-songs-week', ttl: TWELVE_HOURS, fetch: () => getMostStreamedSongsInSingleWeek() });
+cachedJsonRoute('/api/v1/others/mostStreamedAlbumsInSingle', { key: (r) => `records-albums-${r.query.mode === 'week' ? 'week' : 'day'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostStreamedAlbumInSingle(r.query.mode) });
+cachedJsonRoute('/api/v1/youtube/mostViewedVideos', { key: (r) => `mostViewedVideosYT-${r.query.year || 'all'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostViewedYTVideos(r.query.year) });
+
+app.get('/api/v1/songs/viral', async (req, res) => {
+    try {
+        const { limit } = req?.query;
+        const data = await getTopViralTracks(limit);
+        return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
         return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
     }
 });
 
-app.get('/api/v1/daily/albums/:id', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const cacheData = await getCachedData(`daily-albums-${id}`);
-        if (cacheData) {
-            console.log('cacheData', cacheData);
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const artistData = await getArtistAlbumsDailyData(id);
-        setCachedData(`daily-albums-${id}`, artistData, SIX_HOURS);
-        return res.status(200).json({ status: 'success', data: artistData });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
-
-app.get('/api/v1/daily/overall/:id', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const cacheData = await getCachedData(`daily-overall-${id}`);
-        if (cacheData) {
-            console.log('cacheData', cacheData);
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const artistData = await getArtistOverallDailyData(id);
-        setCachedData(`daily-overall-${id}`, artistData, SIX_HOURS);
-        return res.status(200).json({ status: 'success', data: artistData });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
+// Liveness + a quick look at the moving parts (pool/queue sizes, cron state).
+app.get('/api/v1/health', (req, res) => {
+    const mongoState = mongoose.STATES[mongoose.connection.readyState] || String(mongoose.connection.readyState);
+    const body = {
+        status: mongoState === 'connected' ? 'ok' : 'degraded',
+        uptimeSeconds: Math.round(process.uptime()),
+        mongo: mongoState,
+        redis: client.status,
+        http: httpClient.stats(),
+        browser: browserPool.stats(),
+        cron: cronController.status(),
+    };
+    res.status(body.status === 'ok' ? 200 : 503).json(body);
 });
 
 
@@ -240,21 +294,6 @@ app.get('/api/v1/artist/streams/:id', async (req, res) => {
     }
 });
 
-app.get('/api/v1/artist/social/:id', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const cacheData = await getCachedData(`social-${id}`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getArtistSocialData(id);
-        setCachedData(`social-${id}`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
 
 app.get('/api/v1/track/:id', async (req, res) => {
     try {
@@ -375,108 +414,6 @@ app.get('/api/v1/others/getRecomendations', async (req, res) => {
     }
 });
 
-app.get('/api/v1/others/mostStreamedArtists', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { limit } = req.query;
-        const cacheData = await getCachedData(`mostStreamedArtists`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getMostStreamedArtists(limit ? parseInt(limit) : 100);
-        setCachedData(`mostStreamedArtists`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostMonthlyListeners', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const cacheData = await getCachedData(`mostMonthlyListeners`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getMostMonthlyListeners(limit ? parseInt(limit) : 100);
-        setCachedData(`mostMonthlyListeners`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostStreamedSongs', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { year } = req?.query;
-        const cacheData = await getCachedData(`mostStreamedSongs-${year}`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getMostStreamedSongs(year);
-        setCachedData(`mostStreamedSongs-${year}`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostStreamedAlbums', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const cacheData = await getCachedData(`mostStreamedAlbums`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getMostStreamedAlbums();
-        setCachedData(`mostStreamedAlbums`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostStreamedSongsInSingleDay', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { type } = req?.query;
-        const data = await getMostStreamedSongsInSingleDay(type);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostStreamedSongsInSingleWeek', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const data = await getMostStreamedSongsInSingleWeek();
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/others/mostStreamedAlbumsInSingle', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { mode } = req?.query;
-        const data = await getMostStreamedAlbumInSingle(mode);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
 
 app.get('/api/v1/charts/lastFmTopTracks', async (req, res) => {
     try {
@@ -501,7 +438,6 @@ app.get('/api/v1/charts/qqMusic', async (req, res) => {
 });
 
 
-
 app.get('/api/v1/songs/top', async (req, res) => {
     try {
         const { country, limit } = req?.query;
@@ -513,44 +449,6 @@ app.get('/api/v1/songs/top', async (req, res) => {
     }
 });
 
-app.get('/api/v1/songs/viral', async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const data = await getTopViralTracks(limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
-
-app.get('/api/v1/songs/viral', async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const data = await getTopViralTracks(limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
-
-app.get('/api/v1/youtube/mostViewedVideos', heavyRateLimitMiddleware, async (req, res) => {
-    try {
-        const { year } = req?.query;
-        const cacheData = await getCachedData(`mostViewedVideosYT-${year}`);
-        if (cacheData) {
-            return res.status(200).json({ status: 'success', data: cacheData });
-        }
-        const data = await getMostViewedYTVideos(year);
-        setCachedData(`mostViewedVideosYT-${year}`, data, TWELVE_HOURS);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
 
 function getRandomCharacter() {
     try {
@@ -724,4 +622,9 @@ async function shutdown(signal) {
     process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+// A rejected promise nobody awaited (e.g. a late cache write) must not take
+// the whole API down with it; log it and keep serving.
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled promise rejection:', reason);
+});
 process.on('SIGINT', () => shutdown('SIGINT'));

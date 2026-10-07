@@ -9,11 +9,12 @@ const rateLimitMiddleware = setRateLimit({
   legacyHeaders: false,
 });
 
-// Stricter limit for the expensive Puppeteer-backed scraping endpoints.
-// Cached hits are cheap; this only bites a single IP forcing many cold scrapes.
+// Tighter limit for the scraping endpoints. Each cold hit is a short HTTP fetch
+// of a static page (no Chromium any more) and results are cached, so this only
+// bites a single IP hammering many uncached artists at once.
 const heavyRateLimitMiddleware = setRateLimit({
   windowMs: 60 * 1000,
-  max: 15,
+  max: 60,
   message: "Too many heavy requests from this IP, please slow down.",
   standardHeaders: true,
   legacyHeaders: false,

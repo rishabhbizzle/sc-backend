@@ -8,7 +8,16 @@ const UserFavorite = require('./models/userModel');
 const PriorityArtist = require('./models/priorityArtists');
 const axios = require('axios');
 const qqMusic = require('qq-music-api');
+const kworb = require('./scrapers/kworb');
+const wikipedia = require('./scrapers/wikipedia');
 
+// Outbound REST calls (Last.fm, t4ils) must never hang a request.
+const EXTERNAL_API_TIMEOUT_MS = 8000;
+// Chartmetric now sits behind a login wall and its CSS-module class names are
+// hashed per deploy, so the scrape below cannot find its selectors and used to
+// burn a 30s browser slot on every artist page view before returning null.
+// It is off unless explicitly re-enabled once a working approach exists.
+const CHARTMETRIC_SCRAPE_ENABLED = process.env.CHARTMETRIC_SCRAPE_ENABLED === 'true';
 
 
 // Initialize the Spotify API client with client credentials
@@ -19,123 +28,118 @@ const Spotify = SpotifyApi.withClientCredentials(
 );
 
 
+// ---------------------------------------------------------------------------
+// kworb.net (static HTML, fetched over plain HTTP; see scrapers/kworb.js)
+//
+// An artist that kworb does not track yields [] exactly like before. An
+// upstream failure (timeout, 5xx, network) THROWS so the route can answer 503
+// and nothing empty gets cached for six hours.
+// ---------------------------------------------------------------------------
 
 const getArtistSongsDailyData = async (artistId) => {
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const songsData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 2) {
-                const table = tables[1];
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                const columnIndexesToExtractLinks = [0];
-
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    let songTitle = columns[0] && columns[0].textContent ? columns[0].textContent?.startsWith('*') ? columns[0].textContent?.substring(1)?.trim() : columns[0].textContent?.trim() : null
-                    let link = columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
-                    let parts = link?.split('/');
-                    let id = parts && parts[parts.length - 1];
-                    const rowData = {
-                        id: id,
-                        title: songTitle,
-                        link: link,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return songsData;
-    } catch (error) {
-        console.error(error);
-        return []
-    }
-    });
+    const { songs, notFound } = await kworb.getArtistSongsPage(artistId);
+    return notFound || !songs ? [] : songs;
 }
 
 const getArtistAlbumsDailyData = async (artistId) => {
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_albums.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const albumData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 1) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                const columnIndexesToExtractLinks = [0];
-
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    let albumTitle = columns[0] && columns[0].textContent ? columns[0].textContent?.startsWith('^') ? columns[0].textContent?.substring(1)?.trim() : columns[0].textContent?.trim() : null
-                    let albumLink = columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
-                    let parts = albumLink?.split('/');
-                    let id = parts && parts[parts.length - 1];
-
-                    const rowData = {
-                        id: id,
-                        title: albumTitle,
-                        link: albumLink,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null
-                    };
-                    return rowData;
-                });
-            }
-            return null; // Return null if there's no second table
-        });
-
-        return albumData;
-    } catch (error) {
-        console.error(error);
-        return []
-    }
-    });
+    const { albums, notFound } = await kworb.getArtistAlbumsPage(artistId);
+    return notFound || !albums ? [] : albums;
 }
-
 
 const getArtistOverallDailyData = async (artistId) => {
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 2) {
-                const table = tables[0]; // Select the second table
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    const rowData = {
-                        type: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        lead: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        solo: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                        feature: columns[4] && columns[4].textContent ? columns[4].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        return []
-    }
-    });
+    const { overall, notFound } = await kworb.getArtistSongsPage(artistId);
+    return notFound || !overall ? [] : overall;
 }
+
+const getMostStreamedArtists = async (limit = 100) => {
+    console.log('fetching most streamed artists')
+    return (await kworb.getMostStreamedArtists(limit)) || [];
+}
+
+const getMostMonthlyListeners = async (limit = 100) => {
+    console.log('fetching most monthly listeners')
+    return (await kworb.getMostMonthlyListeners(limit)) || [];
+}
+
+const getMostStreamedSongs = async (year) => {
+    return (await kworb.getMostStreamedSongs(year)) || [];
+}
+
+const getMostStreamedAlbums = async () => {
+    return (await kworb.getMostStreamedAlbums()) || [];
+}
+
+const getMostViewedYTVideos = async (year) => {
+    return (await kworb.getMostViewedYTVideos(year)) || [];
+}
+
+// ---------------------------------------------------------------------------
+// Wikipedia "List of Spotify streaming records" (see scrapers/wikipedia.js)
+// ---------------------------------------------------------------------------
+
+const getMostStreamedSongsInSingleDay = async (type) => {
+    return wikipedia.getMostStreamedSongsInSingleDay(type);
+}
+
+const getMostStreamedSongsInSingleWeek = async () => {
+    return wikipedia.getMostStreamedSongsInSingleWeek();
+}
+
+const getMostStreamedAlbumInSingle = async (mode = 'day') => {
+    return wikipedia.getMostStreamedAlbumInSingle(mode);
+}
+
+// ---------------------------------------------------------------------------
+// Chartmetric social stats (headless browser; disabled by default, see above)
+// ---------------------------------------------------------------------------
+
+const getArtistSocialData = async (id) => {
+    if (!CHARTMETRIC_SCRAPE_ENABLED) return null
+    try {
+        const data = await PriorityArtist.findOne({ spotifyId: id })
+        if (!data?.cmId) {
+            return null
+        }
+        return await withPage(async (page) => {
+            await page.goto(`https://app.chartmetric.com/artist/${data?.cmId}`, { waitUntil: 'domcontentloaded' });
+
+            await page.waitForSelector('.StatTilesRow_value__r3Iqn');
+            const socialFootprint = await page.$eval('.StatTilesRow_value__r3Iqn', element => element?.textContent);
+
+            await page.waitForSelector('.TopStats_topStatsContainerItem__3SRla');
+
+            const summaryStats = await page.evaluate(() => {
+                const summaryItems = Array.from(document.querySelectorAll('.TopStats_topStatsContainerItem__3SRla'));
+
+                const stats = summaryItems.map(item => {
+                    const platformNameElement = item.querySelector('div > div:nth-child(1) > div');
+                    const platformName = platformNameElement?.textContent?.trim();
+                    const dataRows = Array.from(item.querySelectorAll('div.TopStats_topStatsContainerItemDetails___Mob8 > div.TopStats_detailRow__m6kRi'));
+                    const platformData = {};
+
+                    dataRows.forEach(row => {
+                        const label = row.querySelector('.TopStats_statName__hZKYr > p')?.textContent?.trim();
+                        const value = row.querySelector('.TopStats_activeToggle__UrDUm > p')?.textContent?.trim();
+                        if (label) platformData[label] = value;
+                    });
+
+                    return {
+                        platform: platformName,
+                        data: platformData
+                    };
+                });
+
+                return stats;
+            });
+
+            return { socialSummary: summaryStats, socialFootprint: socialFootprint };
+        });
+    } catch (error) {
+        console.log('error from getArtistSocialdata:', id, error?.message);
+        return null
+    }
+}
+
 
 function removeAnchorTag(summary) {
     if (!summary) return null;
@@ -150,14 +154,14 @@ const getArtistSpotifyApiData = async (id) => {
         // more details about the artist
         let lastFmData;
         try {
-            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${artist.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`)
+            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${artist.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`, { timeout: EXTERNAL_API_TIMEOUT_MS })
         } catch (error) {
             console.error(error);
         }
 
         let additionalData;
         try {
-            const res = await axios.get(`https://api.t4ils.dev/getArtist?id=${id}`)
+            const res = await axios.get(`https://api.t4ils.dev/getArtist?id=${id}`, { timeout: EXTERNAL_API_TIMEOUT_MS })
             additionalData = res?.data?.data?.data?.artistUnion
         } catch (error) {
             console.error(error);
@@ -207,7 +211,7 @@ const getAlbumData = async (id, metaData = false) => {
         let lastFmData;
         const artist = albumDetails?.artists[0]?.name
         try {
-            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${artist}&album=${albumDetails?.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`)
+            lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${artist}&album=${albumDetails?.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`, { timeout: EXTERNAL_API_TIMEOUT_MS })
         } catch (error) {
             console.error(error);
         }
@@ -234,7 +238,13 @@ const getTrackData = async (id, metaData = false) => {
         let trackFeatures
         let streamingData
         if (!metaData) {
-            trackFeatures = await Spotify.tracks.audioFeatures(id);
+            try {
+                trackFeatures = await Spotify.tracks.audioFeatures(id);
+            } catch (error) {
+                // Spotify restricted this endpoint for newer apps; the track page works without it.
+                console.warn('audioFeatures unavailable for', id, error?.message);
+                trackFeatures = null;
+            }
             streamingData = await Song.findOne({ spotifyId: id }).lean()
             // const trackAnalysis = await Spotify.tracks.audioAnalysis(id);
             const isrc = trackDetails?.external_ids?.isrc
@@ -309,114 +319,6 @@ const getArtistStreamingData = async (id) => {
     }
 }
 
-const getArtistSocialData = async (id) => {
-    try {
-        const data = await PriorityArtist.findOne({ spotifyId: id })
-
-        if (!data?.cmId) {
-            return null
-        }
-        return await withPage(async (page) => {
-        // Replace the URL with the URL of the webpage you want to scrape
-        await page.goto(`https://app.chartmetric.com/artist/${data?.cmId}`, { waitUntil: 'domcontentloaded' });
-
-        // Wait until the data is present in the page
-        // await page.waitForFunction(() => {
-        //     const dataSourceIcons = document.querySelectorAll('.DataSourcePanel_dataSourcesIcons__njYri a');
-        //     return dataSourceIcons.length > 0;
-        // }, { timeout: 10000 });
-
-        // // Extracting data from the HTML
-        // const socialLinks = await page.evaluate(() => {
-        //     const dataSourceIcons = document.querySelectorAll('.DataSourcePanel_dataSourcesIcons__njYri a');
-        //     const sources = [];
-        //     function extractPlatformFromUrl(url) {
-        //         if (!url) return null;
-
-        //         const domains = {
-        //             'spotify': /open.spotify.com/i,
-        //             'itunes': /itunes.apple.com/i,
-        //             'amazon': /music.amazon.com/i,
-        //             'deezer': /deezer.com/i,
-        //             'youtube': /youtube.com/i,
-        //             'soundcloud': /soundcloud.com/i,
-        //             'pandora': /pandora.com/i,
-        //             'genius': /genius.com/i,
-        //             'shazam': /shazam.com/i,
-        //             'line': /music.line.me/i,
-        //             'melon': /melon.com/i,
-        //             'instagram': /instagram.com/i,
-        //             'facebook': /facebook.com/i,
-        //             'tiktok': /tiktok.com/i,
-        //             'youtubeforartist': /charts.youtube.com/i,
-        //             'twitter': /twitter.com/i,
-        //             'wikipedia': /wikipedia.org/i,
-        //             'musicbrainz': /musicbrainz.org/i,
-        //             'discogs': /discogs.com/i,
-        //             'songkick': /songkick.com/i,
-        //             'bandsintown': /bandsintown.com/i,
-        //             'tvmaze': /tvmaze.com/i,
-        //         };
-
-        //         for (const [platform, regex] of Object.entries(domains)) {
-        //             if (regex.test(url)) {
-        //                 return platform;
-        //             }
-        //         }
-
-        //         return null;
-        //     }
-        //     dataSourceIcons.forEach(icon => {
-        //         const link = icon.getAttribute('href')
-        //         const platform = extractPlatformFromUrl(link);
-        //         const source = {
-        //             link,
-        //             platform
-        //         };
-        //         sources.push(source);
-        //     });
-        //     return sources;
-        // });
-
-        await page.waitForSelector('.StatTilesRow_value__r3Iqn');
-        const socialFootprint = await page.$eval('.StatTilesRow_value__r3Iqn', element => element?.textContent);
-
-        await page.waitForSelector('.TopStats_topStatsContainerItem__3SRla');
-
-        const summaryStats = await page.evaluate(() => {
-            const summaryItems = Array.from(document.querySelectorAll('.TopStats_topStatsContainerItem__3SRla'));
-
-            const stats = summaryItems.map(item => {
-                const platformNameElement = item.querySelector('div > div:nth-child(1) > div');
-                const platformName = platformNameElement?.textContent?.trim();
-                const dataRows = Array.from(item.querySelectorAll('div.TopStats_topStatsContainerItemDetails___Mob8 > div.TopStats_detailRow__m6kRi'));
-                const platformData = {};
-
-                dataRows.forEach(row => {
-                    const label = row.querySelector('.TopStats_statName__hZKYr > p')?.textContent?.trim();
-                    const value = row.querySelector('.TopStats_activeToggle__UrDUm > p')?.textContent?.trim();
-                    if (label) platformData[label] = value;
-                });
-
-                return {
-                    platform: platformName,
-                    data: platformData
-                };
-            });
-
-            return stats;
-        });
-
-        return { socialSummary: summaryStats, socialFootprint: socialFootprint };
-        });
-
-    } catch (error) {
-        console.log('error from getArtistSocialdata:', id, error);
-        return null
-    }
-
-}
-
 
 const getUserFavourites = async (kindeId) => {
     try {
@@ -443,7 +345,12 @@ const getDashboardArtistRankingData = async (userId) => {
             let streams;
             let daily;
             if (!artistExist) {
-                const overAllData = await getArtistOverallDailyData(artist.spotifyId)
+                let overAllData = []
+                try {
+                    overAllData = await getArtistOverallDailyData(artist.spotifyId)
+                } catch (error) {
+                    console.error('dashboard: kworb unavailable for', artist.spotifyId, error?.message)
+                }
                 // get the streams, daily obj from the overall data
                 streams = overAllData.find(data => data.type === "Streams")?.total
                 daily = overAllData.find(data => data.type === "Daily")?.total
@@ -526,170 +433,6 @@ const getRecomendations = async (type) => {
 }
 
 
-const getMostStreamedArtists = async (limit) => {
-    console.log('fetching most streamed artists')
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artists.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 0) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1, 101)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
-                    let parts = link && link?.split('/');
-                    let id = parts && parts[parts.length - 1]?.split('_');
-                    id = id && id[0];
-                    const rowData = {
-                        id: id,
-                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        lead: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                        solo: columns[4] && columns[4].textContent ? columns[4].textContent : null,
-                        feature: columns[5] && columns[5].textContent ? columns[5].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-
-const getMostMonthlyListeners = async (limit = 100) => {
-    console.log('fetching most streamed artists')
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/listeners.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 0) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1, 101)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    let link = columns[0] && columns[0].querySelector('a') ? columns[0].querySelector('a').getAttribute('href') : null
-                    let parts = link && link?.split('/');
-                    let id = parts && parts[parts.length - 1]?.split('_');
-                    id = id && id[0];
-
-                    const rowData = {
-                        id: id,
-                        name: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        total: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        daily: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                        peak: columns[5] && columns[5].textContent ? columns[5].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-const getMostStreamedSongs = async (year) => {
-    return withPage(async (page) => {
-    try {
-        const url = year ? `${process.env.DATA_SOURCE}spotify/songs_${year}.html` : `${process.env.DATA_SOURCE}spotify/songs.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 0) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1, 101)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-
-                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
-                    let parts = nameText && nameText?.split('-');
-                    let artistName;
-                    let songName;
-                    if (parts?.length > 1) {
-                        artistName = parts && parts[0]?.trim()
-                        songName = parts && parts[1]?.trim()
-                    }
-
-                    const rowData = {
-                        name: songName,
-                        artist: artistName,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-const getMostStreamedAlbums = async (year) => {
-    return withPage(async (page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/albums.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 0) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1, 101)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-
-                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
-                    let parts = nameText && nameText?.split('-');
-                    let artistName;
-                    let songName;
-                    if (parts?.length > 1) {
-                        artistName = parts && parts[0]?.trim()
-                        songName = parts && parts[1]?.trim()
-                    }
-
-                    const rowData = {
-                        name: songName,
-                        artist: artistName,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
 const markFavourite = async (id, type, spotifyId, image, name) => {
     try {
         let userFavourite = await UserFavorite.findOne({ kindeId: id, type: type, spotifyId: spotifyId }).lean()
@@ -715,157 +458,9 @@ const markFavourite = async (id, type, spotifyId, image, name) => {
 }
 
 
-const getMostStreamedSongsInSingleDay = async (type) => {
-    return withPage(async (page) => {
-    try {
-        const index = type === "holiday" ? 8 : 7;
-        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate((index) => {
-            function formatWikiString(inputString) {
-                try {
-
-                    inputString = inputString.trim().replace(/^,|,$/g, '');
-                    let parsedString;
-                    try {
-                        parsedString = JSON.parse(`[${inputString}]`);
-                    } catch (error) {
-                        console.error("Error parsing input string:", error);
-                        return null;
-                    }
-                    return parsedString.join(', ');
-                } catch (error) {
-                    return null
-                }
-            }
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 8) {
-                const table = tables[index];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    const rowData = {
-                        name: columns[0] && columns[0].textContent ? formatWikiString(columns[0].textContent) : null,
-                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        // dateAchieved: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        }, index);
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-const getMostStreamedSongsInSingleWeek = async () => {
-    return withPage(async (page) => {
-    try {
-        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            function formatWikiString(inputString) {
-                try {
-
-                    inputString = inputString.trim().replace(/^,|,$/g, '');
-                    let parsedString;
-                    try {
-                        parsedString = JSON.parse(`[${inputString}]`);
-                    } catch (error) {
-                        console.error("Error parsing input string:", error);
-                        return null;
-                    }
-                    return parsedString.join(', ');
-                } catch (error) {
-                    return null
-                }
-            }
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 10) {
-                const table = tables[10];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    const rowData = {
-                        name: columns[0] && columns[0].textContent ? formatWikiString(columns[0].textContent) : null,
-                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        dateAchieved: columns[4] && columns[4].textContent ? columns[4].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-const getMostStreamedAlbumInSingle = async (mode = 'day') => {
-    return withPage(async (page) => {
-    try {
-        const url = `https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate((mode) => {
-            function formatWikiString(inputString) {
-                try {
-
-                    inputString = inputString.trim().replace(/^,|,$/g, '');
-                    let parsedString;
-                    try {
-                        parsedString = JSON.parse(`[${inputString}]`);
-                    } catch (error) {
-                        console.error("Error parsing input string:", error);
-                        return null;
-                    }
-                    return parsedString.join(', ');
-                } catch (error) {
-                    return null
-                }
-            }
-            const tables = document.querySelectorAll('table');
-            if (tables.length > mode === 'day' ? 13 : 14) {
-                const table = tables[mode === 'day' ? 13 : 14];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    const rowData = {
-                        name: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        artist: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        streams: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        tracks: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                        average: columns[4] && columns[4].textContent ? columns[4].textContent : null,
-                        dateAchieved: columns[6] && columns[6].textContent ? columns[6].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        }, mode);
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
-}
-
-
 const getLastFmTopTracks = async (page = 1, limit = 10) => {
     try {
-        const data = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=chart.gettoptracks&api_key=${process.env.LAST_FM_API_KEY}&format=json&page=${page}&limit=${limit}`)
+        const data = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=chart.gettoptracks&api_key=${process.env.LAST_FM_API_KEY}&format=json&page=${page}&limit=${limit}`, { timeout: EXTERNAL_API_TIMEOUT_MS })
         return data?.data?.tracks
     } catch (error) {
         console.error(error);
@@ -901,41 +496,6 @@ const getQQMusicTopTracks = async (limit = 100) => {
         console.error(error);
         throw error
     }
-}
-
-
-const getMostViewedYTVideos = async (year) => {
-    return withPage(async (page) => {
-    try {
-        const url = year ? `${process.env.DATA_SOURCE}youtube/topvideos${year}.html` : `${process.env.DATA_SOURCE}youtube/topvideos.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const overallData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length > 0) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-                return rows?.slice(1, 201)?.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-
-                    let nameText = columns[0] && columns[0].textContent ? columns[0].textContent : null
-
-                    const rowData = {
-                        name: nameText,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-        return overallData;
-    } catch (error) {
-        console.error(error);
-        throw error
-    }
-    });
 }
 
 

@@ -1,370 +1,323 @@
+'use strict';
+
 const cron = require('node-cron');
 require('dotenv').config();
-const { withPage } = require('../utilities/browser');
 const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
-const Album= require('../models/albumModel');
-const Song  = require('../models/songModel');
+const Album = require('../models/albumModel');
+const Song = require('../models/songModel');
 const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
+const kworb = require('../scrapers/kworb');
+const { positiveIntEnv, nonNegativeIntEnv } = require('../utilities/semaphore');
 
-const Spotify = SpotifyApi.withClientCredentials(
-    process.env.SPOTIFY_CLIENT_ID,
-    process.env.SPOTIFY_CLIENT_SECRET
-);
+// Daily kworb -> MongoDB sync for the priority artists.
+//
+// Reliability changes versus the original cron:
+//   - fetches the two kworb pages per artist over plain HTTP (no Chromium), so
+//     a run is ~2 requests x 25 artists instead of 75 headless page loads that
+//     queued behind user traffic in the shared browser pool for hours;
+//   - every artist is retried a few times, and one failing artist (or one
+//     failing song/album) never aborts the rest of the run;
+//   - overlapping runs are skipped, so a slow run cannot stack on the next;
+//   - daily keys are anchored on the date kworb prints on the page, so a run
+//     that fires late (or is triggered by hand) still writes the right key;
+//   - songs/albums are updated with one bulkWrite per artist using $set on the
+//     dotted daily key instead of a read-modify-write per document.
 
-function formatDate(date) {
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0'); // Months are zero-based
-    const year = date.getFullYear();
-    return `${day}-${month}-${year}`;
+const SCHEDULE = process.env.CRON_SCHEDULE || '22 02 * * *';
+const TIMEZONE = process.env.CRON_TIMEZONE || 'Asia/Kolkata';
+const ARTIST_DELAY_MS = nonNegativeIntEnv(process.env.CRON_ARTIST_DELAY_MS, 10000);
+const ARTIST_ATTEMPTS = positiveIntEnv(process.env.CRON_ARTIST_ATTEMPTS, 3);
+const METADATA_BACKFILL_PER_ARTIST = 25;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let spotify = null;
+function getSpotify() {
+    if (!spotify) {
+        spotify = SpotifyApi.withClientCredentials(process.env.SPOTIFY_CLIENT_ID, process.env.SPOTIFY_CLIENT_SECRET);
+    }
+    return spotify;
 }
 
-
-const storeArtistSongsDataInDB = async (artistId, page) => {
+async function safeSpotify(label, fn) {
     try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
-
-        await page.goto(url);
-
-        await page.waitForSelector('table');
-
-        const tableData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 2) {
-                const table = tables[1];
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                const columnIndexesToExtractLinks = [0];
-
-                return rows.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-
-                    const rowData = {
-                        title: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        link: columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a')
-                            ? columns[0].querySelector('a').getAttribute('href')
-                            : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null
-                    };
-                    return rowData;
-                });
-            }
-            return null; // Return null if there's no second table
-        });
-
-        let today = new Date();
-        today.setDate(today.getDate() - 2);
-        const formattedDate = formatDate(today);
-        // now store the songs data in the database
-        if (tableData) {
-            for (const data of tableData.slice(1)) {
-                const parts = data?.link?.split('/');
-                let songId = parts[parts.length - 1];
-
-                let total = data?.total?.replace(/,/g, ''); // Remove commas
-                let totalInteger = parseInt(total, 10); // Convert to integer
-
-                let daily = data?.daily?.replace(/,/g, ''); // Remove commas
-                let dailyInteger = parseInt(daily, 10); // Convert to integer
-
-                //  check if the song exists in the database already
-                const song = await Song.findOne({ spotifyId: songId });
-                
-                if (song) {
-                    // update the song
-                    let dailyStreamsObj = song.dailyStreams ? song.dailyStreams : {};
-                    dailyStreamsObj[formattedDate] = dailyInteger;
-
-                    let newData = {
-                        totalStreams: totalInteger,
-                        dailyStreams: dailyStreamsObj,
-                        // isrc: songData?.external_ids?.isrc ? songData?.external_ids?.isrc : null,
-                        // image: songData?.album?.images?.length > 0 ? songData?.album?.images[0]?.url : null
-                    }
-
-                    await Song.updateOne({ spotifyId: songId }, newData);
-
-                } else {
-                    let songData = await Spotify.tracks.get(songId);
-                    // create the song
-                    const finalString = data?.title?.startsWith('*') ? data?.title?.substring(1) : data?.title;
-                    const newSong = {
-                        spotifyId: songId,
-                        title: finalString.trim(),
-                        artistSpotifyId: artistId,
-                        totalStreams: totalInteger,
-                        dailyStreams: {
-                            [formattedDate]: dailyInteger
-                        },
-                        isrc: songData?.external_ids?.isrc ? songData?.external_ids?.isrc : null,
-                        image: songData?.album?.images?.length > 0 ? songData?.album?.images[0]?.url : null
-                    }
-                    await Song.create(newSong);
-                }
-            }
-            return true;
-        }
-        return false;
-
+        return await fn(getSpotify());
     } catch (error) {
-        console.log(error);
-        return false;
+        console.warn(`[cron] spotify ${label} failed: ${error && error.message}`);
+        return null;
+    }
+}
+
+const defaultDeps = {
+    fetchSongsPage: (artistId) => kworb.getArtistSongsPage(artistId),
+    fetchAlbumsPage: (artistId) => kworb.getArtistAlbumsPage(artistId),
+    getTrack: (id) => safeSpotify(`tracks.get(${id})`, (s) => s.tracks.get(id)),
+    getAlbum: (id) => safeSpotify(`albums.get(${id})`, (s) => s.albums.get(id)),
+    getArtist: (id) => safeSpotify(`artists.get(${id})`, (s) => s.artists.get(id)),
+};
+
+// --- helpers ---------------------------------------------------------------
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+function formatDateKey(date) {
+    return `${pad2(date.getUTCDate())}-${pad2(date.getUTCMonth() + 1)}-${date.getUTCFullYear()}`;
+}
+
+// Daily keys are "DD-MM-YYYY". The original cron used "UTC today minus two
+// days"; kworb regenerates its pages at ~01:10 UTC and stamps them with the
+// previous day ("Last updated: 2026/10/06" all through Oct 7), so the same key
+// is "kworb's printed date minus one day". Anchoring on kworb's date keeps the
+// key identical no matter when (or how late) the run actually happens, and
+// labels the data correctly even if kworb has not regenerated yet.
+function dateKeyFor(lastUpdated, now = new Date()) {
+    if (typeof lastUpdated === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(lastUpdated)) {
+        const base = new Date(`${lastUpdated}T00:00:00Z`);
+        base.setUTCDate(base.getUTCDate() - 1);
+        return formatDateKey(base);
+    }
+    const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    base.setUTCDate(base.getUTCDate() - 2);
+    return formatDateKey(base);
+}
+
+function toInt(text) {
+    if (text == null) return null;
+    const n = parseInt(String(text).replace(/,/g, ''), 10);
+    return Number.isNaN(n) ? null : n;
+}
+
+function firstImage(meta) {
+    const images = meta && (meta.images || (meta.album && meta.album.images));
+    return Array.isArray(images) && images.length > 0 ? images[0].url : null;
+}
+
+// --- writers ---------------------------------------------------------------
+
+async function upsertArtist(artistId, overall, dateKey, deps) {
+    const row = (type) => (overall || []).find((r) => r.type === type) || {};
+    const streams = row('Streams');
+    const daily = row('Daily');
+    const meta = await deps.getArtist(artistId);
+
+    const set = {
+        totalStreams: toInt(streams.total),
+        leadStreams: toInt(streams.lead),
+        soloStreams: toInt(streams.solo),
+        featureStreams: toInt(streams.feature),
+        [`dailyTotalStreams.${dateKey}`]: toInt(daily.total) ?? 0,
+        [`dailyLeadStreams.${dateKey}`]: toInt(daily.lead) ?? 0,
+        [`dailySoloStreams.${dateKey}`]: toInt(daily.solo) ?? 0,
+        [`dailyFeatureStreams.${dateKey}`]: toInt(daily.feature) ?? 0,
+    };
+    const setOnInsert = { spotifyId: artistId };
+    if (meta) {
+        if (meta.name) set.name = meta.name;
+        if (meta.followers && typeof meta.followers.total === 'number') set.followers = meta.followers.total;
+        if (typeof meta.popularity === 'number') set.popularity = meta.popularity;
+        if (Array.isArray(meta.genres)) set.genres = meta.genres;
+        const image = firstImage(meta);
+        if (image) set.image = image;
+    }
+    if (!set.name) setOnInsert.name = artistId; // schema requires a name; Spotify was unreachable
+
+    const result = await Artist.updateOne({ spotifyId: artistId }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+    return { created: result.upsertedCount || 0, updated: result.matchedCount || 0, metadata: !!meta };
+}
+
+// Shared logic for songs and albums: bulk $set for known ids, create unknown
+// ids with Spotify metadata, and backfill metadata on a bounded number of
+// existing docs that are missing it.
+async function upsertCollection({ Model, artistId, rows, dateKey, fetchMeta, buildMeta, metaFields, label }) {
+    const items = (rows || []).filter((r) => r && r.id && kworb.assertArtistId(r.id)).map((r) => ({
+        id: r.id, title: r.title, total: toInt(r.total), daily: toInt(r.daily),
+    }));
+    const stats = { total: items.length, updated: 0, created: 0, backfilled: 0, failed: 0, skipped: (rows || []).length - items.length };
+    if (items.length === 0) return stats;
+
+    const existing = new Map(
+        (await Model.find({ spotifyId: { $in: items.map((i) => i.id) } }).select(['spotifyId', ...metaFields].join(' ')).lean())
+            .map((d) => [d.spotifyId, d])
+    );
+
+    const ops = [];
+    const toCreate = [];
+    const toBackfill = [];
+    for (const item of items) {
+        const doc = existing.get(item.id);
+        if (doc) {
+            ops.push({ updateOne: { filter: { spotifyId: item.id }, update: { $set: { totalStreams: item.total, [`dailyStreams.${dateKey}`]: item.daily } } } });
+            if (metaFields.some((f) => !doc[f]) && toBackfill.length < METADATA_BACKFILL_PER_ARTIST) toBackfill.push(item);
+        } else {
+            toCreate.push(item);
+        }
     }
 
-}
+    if (ops.length) {
+        const result = await Model.bulkWrite(ops, { ordered: false });
+        stats.updated = result.modifiedCount + result.upsertedCount;
+    }
 
-const storeArtistOverallDataInDB = async (artistId, page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_songs.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-
-        const tableData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 2) {
-                const table = tables[0]; // Select the second table
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                return rows.slice(1).map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-                    const rowData = {
-                        type: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        lead: columns[2] && columns[2].textContent ? columns[2].textContent : null,
-                        solo: columns[3] && columns[3].textContent ? columns[3].textContent : null,
-                        feature: columns[4] && columns[4].textContent ? columns[4].textContent : null,
-                    };
-                    return rowData;
-                });
-            }
-            return null;
-        });
-
-        let today = new Date();
-        today.setDate(today.getDate() - 2);
-        const formattedDate = formatDate(today);
-        // now store the artist data in the database
-        console.log("====== TABLE DATA ======", tableData)
-        if (tableData) {
-            let artistData = await Spotify.artists.get(artistId);
-            console.log(artistData);
-            let totalStreamsData = tableData.filter(data => data.type === 'Streams')[0];
-            let dailyStreamsData = tableData.filter(data => data.type === 'Daily')[0];
-            let tracksData = tableData.filter(data => data.type === 'Tracks')[0];
-
-            // check if the artist exists in the database already
-
-            const artist = await Artist.findOne({ spotifyId: artistId });
-            if (artist) {
-                // update the artist
-                let dailyTotalStreamsObj = artist.dailyTotalStreams ? artist.dailyTotalStreams : {};
-                dailyTotalStreamsObj[formattedDate] = dailyStreamsData?.total ? parseInt(dailyStreamsData?.total?.replace(/,/g, ''), 10) : 0;
-
-                let dailyLeadStreamsObj = artist.dailyLeadStreams ? artist.dailyLeadStreams : {};
-                dailyLeadStreamsObj[formattedDate] = dailyStreamsData?.lead ? parseInt(dailyStreamsData?.lead?.replace(/,/g, ''), 10) : 0;
-
-                let dailySoloStreamsObj = artist.dailySoloStreams ? artist.dailySoloStreams : {};
-                dailySoloStreamsObj[formattedDate] = dailyStreamsData?.solo ? parseInt(dailyStreamsData?.solo?.replace(/,/g, ''), 10) : 0;
-
-                let dailyFeatureStreamsObj = artist.dailyFeatureStreams ? artist.dailyFeatureStreams : {};
-                dailyFeatureStreamsObj[formattedDate] = dailyStreamsData?.feature ? parseInt(dailyStreamsData?.feature?.replace(/,/g, ''), 10) : 0;
-
-
-                let newData = {
-                    followers: artistData?.followers?.total ? artistData?.followers?.total : null,
-                    popularity: artistData?.popularity ? artistData?.popularity : null,
-                    totalStreams: totalStreamsData?.total ? parseInt(totalStreamsData?.total?.replace(/,/g, ''), 10) : null,
-                    leadStreams: totalStreamsData?.lead ? parseInt(totalStreamsData?.lead?.replace(/,/g, ''), 10) : null,
-                    soloStreams: totalStreamsData?.solo ? parseInt(totalStreamsData?.solo?.replace(/,/g, ''), 10) : null,
-                    featureStreams: totalStreamsData?.feature ? parseInt(totalStreamsData?.feature?.replace(/,/g, ''), 10) : null,
-                    dailyTotalStreams: dailyTotalStreamsObj,
-                    dailyLeadStreams: dailyLeadStreamsObj,
-                    dailySoloStreams: dailySoloStreamsObj,
-                    dailyFeatureStreams: dailyFeatureStreamsObj,
-                    image: artistData?.images?.length > 0 ? artistData?.images[0]?.url : null
-                }
-                console.log("====== NEW DATA ======", newData)
-                await Artist.updateOne({ spotifyId: artistId }, newData);
-
-
+    for (const item of toCreate) {
+        try {
+            const meta = await fetchMeta(item.id);
+            await Model.create({
+                spotifyId: item.id,
+                title: item.title,
+                artistSpotifyId: artistId,
+                totalStreams: item.total,
+                dailyStreams: { [dateKey]: item.daily },
+                ...buildMeta(meta),
+            });
+            stats.created++;
+        } catch (error) {
+            if (error && error.code === 11000) {
+                // Created meanwhile (e.g. the same song listed under a featured artist): update instead.
+                await Model.updateOne({ spotifyId: item.id }, { $set: { totalStreams: item.total, [`dailyStreams.${dateKey}`]: item.daily } });
+                stats.updated++;
             } else {
-                // create the artist
-                const newArtist = {
-                    spotifyId: artistId,
-                    name: artistData?.name ? artistData?.name : null,
-                    followers: artistData?.followers?.total ? artistData?.followers?.total : null,
-                    popularity: artistData?.popularity ? artistData?.popularity : null,
-                    genres: artistData?.genres ? artistData?.genres : [],
-                    totalStreams: totalStreamsData?.total ? parseInt(totalStreamsData?.total?.replace(/,/g, ''), 10) : null,
-                    leadStreams: totalStreamsData?.lead ? parseInt(totalStreamsData?.lead?.replace(/,/g, ''), 10) : null,
-                    soloStreams: totalStreamsData?.solo ? parseInt(totalStreamsData?.solo?.replace(/,/g, ''), 10) : null,
-                    featureStreams: totalStreamsData?.feature ? parseInt(totalStreamsData?.feature?.replace(/,/g, ''), 10) : null,
-                    dailyTotalStreams: {
-                        [formattedDate]: dailyStreamsData?.total ? parseInt(dailyStreamsData?.total?.replace(/,/g, ''), 10) : 0
-                    },
-                    dailyLeadStreams: {
-                        [formattedDate]: dailyStreamsData?.lead ? parseInt(dailyStreamsData?.lead?.replace(/,/g, ''), 10) : 0
-                    },
-                    dailySoloStreams: {
-                        [formattedDate]: dailyStreamsData?.solo ? parseInt(dailyStreamsData?.solo?.replace(/,/g, ''), 10) : 0
-                    },
-                    dailyFeatureStreams: {
-                        [formattedDate]: dailyStreamsData?.feature ? parseInt(dailyStreamsData?.feature?.replace(/,/g, ''), 10) : 0
-                    },
-                    image: artistData?.images?.length > 0 ? artistData?.images[0]?.url : null
-                }
-                await Artist.create(newArtist);
-
+                stats.failed++;
+                console.warn(`[cron] ${label} create failed for ${item.id} (${item.title}): ${error && error.message}`);
             }
-            return true;
         }
-        return false;
-
-    } catch (error) {
-        console.log(error);
-        return false;
     }
+
+    for (const item of toBackfill) {
+        const meta = await fetchMeta(item.id);
+        const fields = buildMeta(meta);
+        const set = Object.fromEntries(Object.entries(fields).filter(([, v]) => v != null));
+        if (Object.keys(set).length === 0) continue;
+        await Model.updateOne({ spotifyId: item.id }, { $set: set });
+        stats.backfilled++;
+    }
+
+    return stats;
 }
 
-
-const storeArtistAlbumsDataInDB = async (artistId, page) => {
-    try {
-        const url = `${process.env.DATA_SOURCE}spotify/artist/${artistId}_albums.html`;
-        await page.goto(url);
-        await page.waitForSelector('table');
-        const tableData = await page.evaluate(() => {
-            const tables = document.querySelectorAll('table');
-            if (tables.length >= 1) {
-                const table = tables[0];
-                const rows = Array.from(table.querySelectorAll('tr'));
-
-                const columnIndexesToExtractLinks = [0];
-
-                return rows.map(row => {
-                    const columns = Array.from(row.querySelectorAll('td'));
-
-                    const rowData = {
-                        title: columns[0] && columns[0].textContent ? columns[0].textContent : null,
-                        link: columnIndexesToExtractLinks.includes(0) && columns[0] && columns[0].querySelector('a')
-                            ? columns[0].querySelector('a').getAttribute('href')
-                            : null,
-                        total: columns[1] && columns[1].textContent ? columns[1].textContent : null,
-                        daily: columns[2] && columns[2].textContent ? columns[2].textContent : null
-                    };
-                    return rowData;
-                });
-            }
-            return null; // Return null if there's no second table
-        });
-
-        let today = new Date();
-        today.setDate(today.getDate() - 2);
-        const formattedDate = formatDate(today);
-        // now store the album data in the database
-        if (tableData) {
-            for (const data of tableData.slice(1)) {
-                const parts = data?.link?.split('/');
-                let albumId = parts[parts.length - 1];
-
-                let total = data?.total?.replace(/,/g, ''); // Remove commas
-                let totalInteger = parseInt(total, 10); // Convert to integer
-
-                let daily = data?.daily?.replace(/,/g, ''); // Remove commas
-                let dailyInteger = parseInt(daily, 10); // Convert to integer
-
-                //  check if the song exists in the database already
-                const album = await Album.findOne({ spotifyId: albumId });
-
-                if (album) {
-                    // update the album
-                    let dailyStreamsObj = album.dailyStreams ? album.dailyStreams : {};
-                    dailyStreamsObj[formattedDate] = dailyInteger;
-
-                    let newData = {
-                        totalStreams: totalInteger,
-                        dailyStreams: dailyStreamsObj,
-                        // image: albumData?.images?.length > 0 ? albumData?.images[0]?.url : null
-                    }
-
-                    await Album.updateOne({ spotifyId: albumId }, newData);
-
-
-                } else {
-                    // create the album
-                    let albumData = await Spotify.albums.get(albumId);
-                    const finalString = data?.title?.startsWith('^') ? data?.title?.substring(1) : data?.title;
-                    const newAlbum = {
-                        spotifyId: albumId,
-                        title: finalString.trim(),
-                        artistSpotifyId: artistId,
-                        totalStreams: totalInteger,
-                        dailyStreams: {
-                            [formattedDate]: dailyInteger
-                        },
-                        image: albumData?.images?.length > 0 ? albumData?.images[0]?.url : null
-                    }
-                    await Album.create(newAlbum);
-                }
-            }
-            return true;
-        }
-        return false;
-
-    } catch (error) {
-        console.log(error);
-        return false;
-    }
-
+function upsertSongs(artistId, songs, dateKey, deps) {
+    return upsertCollection({
+        Model: Song, artistId, rows: songs, dateKey, label: 'song',
+        fetchMeta: deps.getTrack,
+        metaFields: ['isrc', 'image'],
+        buildMeta: (meta) => ({
+            isrc: meta && meta.external_ids && meta.external_ids.isrc ? meta.external_ids.isrc : null,
+            image: firstImage(meta),
+        }),
+    });
 }
 
-const storeArtistDiscographyDataInDB = async (artistId) => {
-    try {
-        const overall = await withPage(page => storeArtistOverallDataInDB(artistId, page));
-        const albums = await withPage(page => storeArtistAlbumsDataInDB(artistId, page));
-        const songs = await withPage(page => storeArtistSongsDataInDB(artistId, page));
-        return {
-            overall,
-            albums,
-            songs
-        }
-    } catch (error) {
-        console.log(error);
-    }
+function upsertAlbums(artistId, albums, dateKey, deps) {
+    return upsertCollection({
+        Model: Album, artistId, rows: albums, dateKey, label: 'album',
+        fetchMeta: deps.getAlbum,
+        metaFields: ['image'],
+        buildMeta: (meta) => ({ image: firstImage(meta) }),
+    });
 }
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// --- per-artist pipeline -----------------------------------------------------
 
-// Run the cron job at 10:30 AM everyday
-cron.schedule('22 02 * * *', async () => {
-    console.log("====== CRON EXECUTOR STARTED ======")
-    try {
-        let results = []
-        let priorityArtists = await PriorityArtist.find({})
-        for (const [index, artist] of priorityArtists.entries()) {
-            console.log("====== ARTIST ======", artist.spotifyId)
-            let res = await storeArtistDiscographyDataInDB(artist.spotifyId)
-            results.push({
-            artistId: artist.spotifyId,
-            result: res
-            })
-            console.log("====== ARTIST DONE ======", artist.spotifyId)
-            
-            // Wait for 40 seconds before processing the next artist
-            if (index !== priorityArtists.length - 1) {
-                console.log("====== Waiting for 35 seconds ======")
-                await delay(35000); // 40 seconds delay
-            }
-        }
-
-        console.log("====== PRIORITY ARTISTS DONE ======")
-        console.log("====== RESULTS ======", results)
-
-    } catch (error) {
-        console.log("cron error", error);
+async function processArtist(artistId, deps = defaultDeps) {
+    const songsPage = await deps.fetchSongsPage(artistId);
+    if (songsPage.notFound || !songsPage.overall) {
+        return { artistId, ok: false, error: 'artist page not found on kworb' };
     }
-},{
-    scheduled: true,
-    timezone: 'Asia/Kolkata' // Set the timezone to IST
-});
+    const dateKey = dateKeyFor(songsPage.lastUpdated);
+    const artist = await upsertArtist(artistId, songsPage.overall, dateKey, deps);
+    const songs = await upsertSongs(artistId, songsPage.songs, dateKey, deps);
 
+    const albumsPage = await deps.fetchAlbumsPage(artistId);
+    const albums = albumsPage.notFound || !albumsPage.albums
+        ? { skipped: true }
+        : await upsertAlbums(artistId, albumsPage.albums, dateKey, deps);
+
+    return { artistId, ok: true, dateKey, lastUpdated: songsPage.lastUpdated, artist, songs, albums };
+}
+
+async function processArtistWithRetry(artistId, deps = defaultDeps, attempts = ARTIST_ATTEMPTS) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            return await processArtist(artistId, deps);
+        } catch (error) {
+            lastError = error;
+            console.warn(`[cron] artist ${artistId} attempt ${attempt}/${attempts} failed: ${error && error.message}`);
+            if (attempt < attempts) await sleep(Math.min(30000, 2000 * 2 ** (attempt - 1)));
+        }
+    }
+    return { artistId, ok: false, error: lastError && lastError.message };
+}
+
+// --- run orchestration -----------------------------------------------------
+
+const state = { running: false, lastRun: null, lastError: null };
+
+async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = defaultDeps } = {}) {
+    if (state.running) {
+        console.warn('[cron] previous run still in progress; skipping this trigger');
+        return { skipped: true, summary: state.lastRun };
+    }
+    state.running = true;
+    const startedAt = new Date();
+    const results = [];
+    console.log(`[cron] ====== DAILY UPDATE STARTED ${startedAt.toISOString()} ======`);
+    try {
+        const artists = Array.isArray(artistIds) && artistIds.length
+            ? artistIds.map((spotifyId) => ({ spotifyId }))
+            : await PriorityArtist.find({}).lean();
+        for (const [index, artist] of artists.entries()) {
+            const result = await processArtistWithRetry(artist.spotifyId, deps);
+            results.push(result);
+            console.log(`[cron] ${index + 1}/${artists.length} ${artist.spotifyId}: ${result.ok ? `ok (key ${result.dateKey}, songs ${result.songs.updated}+${result.songs.created}, albums ${result.albums.skipped ? 'skipped' : `${result.albums.updated}+${result.albums.created}`})` : `FAILED: ${result.error}`}`);
+            if (index < artists.length - 1 && delayMs > 0) await sleep(delayMs);
+        }
+    } catch (error) {
+        state.lastError = { at: new Date().toISOString(), message: error && error.message };
+        console.error('[cron] run aborted:', error);
+    } finally {
+        state.running = false;
+    }
+    const finishedAt = new Date();
+    const summary = {
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: finishedAt - startedAt,
+        artists: results.length,
+        ok: results.filter((r) => r.ok).length,
+        failed: results.filter((r) => !r.ok).map((r) => ({ artistId: r.artistId, error: r.error })),
+        dateKeys: [...new Set(results.filter((r) => r.ok).map((r) => r.dateKey))],
+    };
+    state.lastRun = summary;
+    console.log(`[cron] ====== DAILY UPDATE DONE: ${summary.ok}/${summary.artists} artists ok in ${Math.round(summary.durationMs / 1000)}s ======`);
+    if (summary.failed.length) console.log('[cron] failed artists:', JSON.stringify(summary.failed));
+    return { skipped: false, summary, results };
+}
+
+function status() {
+    return { schedule: SCHEDULE, timezone: TIMEZONE, running: state.running, lastRun: state.lastRun, lastError: state.lastError };
+}
+
+let task = null;
+function start() {
+    if (task) return task;
+    if (!cron.validate(SCHEDULE)) {
+        throw new Error(`CRON_SCHEDULE "${SCHEDULE}" is not a valid cron expression`);
+    }
+    task = cron.schedule(SCHEDULE, () => {
+        runDailyUpdate().catch((error) => console.error('[cron] unexpected failure:', error));
+    }, { scheduled: true, timezone: TIMEZONE });
+    console.log(`[cron] scheduled daily kworb sync at "${SCHEDULE}" (${TIMEZONE})`);
+    return task;
+}
+
+module.exports = {
+    start,
+    status,
+    runDailyUpdate,
+    processArtist,
+    processArtistWithRetry,
+    dateKeyFor,
+    toInt,
+    _internals: { upsertArtist, upsertSongs, upsertAlbums, defaultDeps },
+};
