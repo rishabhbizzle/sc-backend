@@ -156,7 +156,7 @@ const getArtistSpotifyApiData = async (id) => {
         try {
             lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${artist.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`, { timeout: EXTERNAL_API_TIMEOUT_MS })
         } catch (error) {
-            console.error(error);
+            console.warn('last.fm unavailable:', error?.message);
         }
 
         let additionalData;
@@ -164,7 +164,7 @@ const getArtistSpotifyApiData = async (id) => {
             const res = await axios.get(`https://api.t4ils.dev/getArtist?id=${id}`, { timeout: EXTERNAL_API_TIMEOUT_MS })
             additionalData = res?.data?.data?.data?.artistUnion
         } catch (error) {
-            console.error(error);
+            console.warn('t4ils unavailable:', error?.message);
         }
         return {
             ...artist,
@@ -213,7 +213,7 @@ const getAlbumData = async (id, metaData = false) => {
         try {
             lastFmData = await axios.get(`http://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${artist}&album=${albumDetails?.name}&api_key=${process.env.LAST_FM_API_KEY}&format=json`, { timeout: EXTERNAL_API_TIMEOUT_MS })
         } catch (error) {
-            console.error(error);
+            console.warn('last.fm unavailable:', error?.message);
         }
         return {
             albumDetails: {
@@ -338,7 +338,7 @@ const getDashboardArtistRankingData = async (userId) => {
     try {
         let responseData = [];
         const { artistFavourites } = await getUserFavourites(userId)
-        for (let artist of artistFavourites) {
+        responseData = await Promise.all(artistFavourites.map(async (artist) => {
             // check if this artists exist in our db or not
 
             const artistExist = await getArtistStreamingData(artist.spotifyId)
@@ -378,8 +378,8 @@ const getDashboardArtistRankingData = async (userId) => {
                 name: artist.name
             }
 
-            responseData.push(artistData)
-        }
+            return artistData
+        }))
         return responseData?.sort((a, b) => {
             const aNum = parseInt(a?.dailyStreams?.replace(/,/g, ''))
             const bNum = parseInt(b?.dailyStreams?.replace(/,/g, ''))

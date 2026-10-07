@@ -29,6 +29,9 @@ const TIMEZONE = process.env.CRON_TIMEZONE || 'Asia/Kolkata';
 const ARTIST_DELAY_MS = nonNegativeIntEnv(process.env.CRON_ARTIST_DELAY_MS, 10000);
 const ARTIST_ATTEMPTS = positiveIntEnv(process.env.CRON_ARTIST_ATTEMPTS, 3);
 const METADATA_BACKFILL_PER_ARTIST = 25;
+// Gap between consecutive Spotify metadata lookups (one per NEW song/album), so a
+// brand-new artist with 500 songs never bursts into Spotify's rate limit.
+const SPOTIFY_PACING_MS = nonNegativeIntEnv(process.env.CRON_SPOTIFY_PACING_MS, 120);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,11 +43,17 @@ function getSpotify() {
     return spotify;
 }
 
-async function safeSpotify(label, fn) {
+async function safeSpotify(label, fn, attempt = 1) {
     try {
         return await fn(getSpotify());
     } catch (error) {
-        console.warn(`[cron] spotify ${label} failed: ${error && error.message}`);
+        const message = String(error && error.message || '');
+        if (attempt === 1 && /429|rate ?limit|Too Many Requests/i.test(message)) {
+            console.warn(`[cron] spotify ${label} rate limited; retrying in 5s`);
+            await sleep(5000);
+            return safeSpotify(label, fn, 2);
+        }
+        console.warn(`[cron] spotify ${label} failed: ${message}`);
         return null;
     }
 }
@@ -161,6 +170,7 @@ async function upsertCollection({ Model, artistId, rows, dateKey, fetchMeta, bui
 
     for (const item of toCreate) {
         try {
+            if (SPOTIFY_PACING_MS) await sleep(SPOTIFY_PACING_MS);
             const meta = await fetchMeta(item.id);
             await Model.create({
                 spotifyId: item.id,
@@ -184,6 +194,7 @@ async function upsertCollection({ Model, artistId, rows, dateKey, fetchMeta, bui
     }
 
     for (const item of toBackfill) {
+        if (SPOTIFY_PACING_MS) await sleep(SPOTIFY_PACING_MS);
         const meta = await fetchMeta(item.id);
         const fields = buildMeta(meta);
         const set = Object.fromEntries(Object.entries(fields).filter(([, v]) => v != null));

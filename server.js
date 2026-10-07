@@ -2,7 +2,9 @@
 require('dotenv').config();
 const express = require('express');
 const { getArtistSongsDailyData, getArtistMostPopularSongs, getArtistSpotifyApiData, getArtistAlbumsDailyData, getArtistOverallDailyData, getTrackData, getAlbumData, getNewReleases, isUserFavorite, getRecomendations, getArtistStreamingData, getDashboardArtistRankingData, getUserFavourites, getMostStreamedArtists, getMostMonthlyListeners, getMostStreamedSongs, getMostStreamedAlbums, markFavourite, getMostStreamedSongsInSingleDay, getMostStreamedSongsInSingleWeek, getMostStreamedAlbumInSingle, getArtistSocialData, getLastFmTopTracks, getTopTracksBasedOnCharts, getQQMusicTopTracks, getTopViralTracks, getMostViewedYTVideos, searchService } = require('./services');
-const port = 4000;
+// Deliberately not `PORT`: the droplet's .env sets PORT for something else and
+// nginx proxies to 4000. API_PORT exists so tests can run instances side by side.
+const port = parseInt(process.env.API_PORT, 10) > 0 ? parseInt(process.env.API_PORT, 10) : 4000;
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
@@ -229,16 +231,20 @@ cachedJsonRoute('/api/v1/others/mostStreamedSongsInSingleWeek', { key: () => 're
 cachedJsonRoute('/api/v1/others/mostStreamedAlbumsInSingle', { key: (r) => `records-albums-${r.query.mode === 'week' ? 'week' : 'day'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostStreamedAlbumInSingle(r.query.mode) });
 cachedJsonRoute('/api/v1/youtube/mostViewedVideos', { key: (r) => `mostViewedVideosYT-${r.query.year || 'all'}`, ttl: TWELVE_HOURS, fetch: (r) => getMostViewedYTVideos(r.query.year) });
 
-app.get('/api/v1/songs/viral', async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const data = await getTopViralTracks(limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
+
+// ---------------------------------------------------------------------------
+// Spotify / Last.fm / QQ Music routes. Cached for an hour so a Spotify rate
+// limit or outage cannot take the landing page or an artist page down, and so
+// a traffic spike does not turn into one Spotify call per visitor.
+// ---------------------------------------------------------------------------
+const q = (value, fallback) => (Array.isArray(value) ? value[0] : value) || fallback;
+cachedJsonRoute('/api/v1/artist/popular/:id', { heavy: false, key: (r) => `artist-popular-${r.params.id}`, ttl: SIX_HOURS, fetch: (r) => getArtistMostPopularSongs(r.params.id) });
+cachedJsonRoute('/api/v1/artist/:id', { heavy: false, key: (r) => `artist-meta-${r.params.id}`, ttl: ONE_HOUR, fetch: (r) => getArtistSpotifyApiData(r.params.id) });
+cachedJsonRoute('/api/v1/others/new-releases', { heavy: false, key: (r) => `new-releases-${q(r.query.limit, 50)}`, ttl: ONE_HOUR, fetch: (r) => getNewReleases(q(r.query.limit, undefined)) });
+cachedJsonRoute('/api/v1/songs/top', { heavy: false, key: (r) => `songs-top-${q(r.query.country, 'global')}-${q(r.query.limit, 50)}`, ttl: ONE_HOUR, fetch: (r) => getTopTracksBasedOnCharts(q(r.query.country, undefined), q(r.query.limit, undefined)) });
+cachedJsonRoute('/api/v1/songs/viral', { heavy: false, key: (r) => `songs-viral-${q(r.query.limit, 50)}`, ttl: ONE_HOUR, fetch: (r) => getTopViralTracks(q(r.query.limit, undefined)) });
+cachedJsonRoute('/api/v1/charts/lastFmTopTracks', { heavy: false, key: (r) => `lastfm-top-${q(r.query.page, 1)}-${q(r.query.limit, 10)}`, ttl: ONE_HOUR, fetch: (r) => getLastFmTopTracks(q(r.query.page, undefined), q(r.query.limit, undefined)) });
+cachedJsonRoute('/api/v1/charts/qqMusic', { heavy: false, key: (r) => `qq-top-${q(r.query.limit, 100)}`, ttl: ONE_HOUR, fetch: (r) => getQQMusicTopTracks(q(r.query.limit, undefined)) });
 
 // Liveness + a quick look at the moving parts (pool/queue sizes, cron state).
 app.get('/api/v1/health', (req, res) => {
@@ -257,30 +263,8 @@ app.get('/api/v1/health', (req, res) => {
 
 
 //spotify
-app.get('/api/v1/artist/popular/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const data = await getArtistMostPopularSongs(id);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
 
 //spotify
-app.get('/api/v1/artist/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const data = await getArtistSpotifyApiData(id);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
 
 app.get('/api/v1/artist/streams/:id', async (req, res) => {
     try {
@@ -321,18 +305,6 @@ app.get('/api/v1/album/:id', async (req, res) => {
     }
 });
 
-
-app.get('/api/v1/others/new-releases', async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const data = await getNewReleases(limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
 
 app.post('/api/v1/user/isFavourite', async (req, res) => {
     try {
@@ -411,41 +383,6 @@ app.get('/api/v1/others/getRecomendations', async (req, res) => {
         console.error(error);
         return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
 
-    }
-});
-
-
-app.get('/api/v1/charts/lastFmTopTracks', async (req, res) => {
-    try {
-        const { page, limit } = req?.query;
-        const data = await getLastFmTopTracks(page, limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
-
-app.get('/api/v1/charts/qqMusic', async (req, res) => {
-    try {
-        const { limit } = req?.query;
-        const data = await getQQMusicTopTracks(limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-    }
-});
-
-
-app.get('/api/v1/songs/top', async (req, res) => {
-    try {
-        const { country, limit } = req?.query;
-        const data = await getTopTracksBasedOnCharts(country, limit);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
     }
 });
 

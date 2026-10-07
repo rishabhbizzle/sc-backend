@@ -11,7 +11,8 @@ const { fetchHtml } = require('../utilities/http');
 // their header text, and rowspan/colspan cells are expanded so merged artist
 // cells carry over to the rows below them.
 
-const PAGE_URL = 'https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records';
+// Overridable so the integration tests can point it at a local mock.
+const PAGE_URL = process.env.WIKIPEDIA_RECORDS_URL || 'https://en.wikipedia.org/wiki/List_of_Spotify_streaming_records';
 // Wikimedia asks automated clients to identify themselves with contact info.
 const USER_AGENT = 'StatsCraveBot/1.0 (+https://statscrave.com; reads the public streaming-records tables)';
 

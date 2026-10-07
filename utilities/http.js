@@ -36,6 +36,47 @@ const MAX_BODY_BYTES = 15 * 1024 * 1024;
 const semaphore = new Semaphore(MAX_CONCURRENCY, { name: 'http' });
 const inflight = new Map();
 
+// Per-host circuit breaker. After CIRCUIT_FAILURES consecutive upstream
+// failures (timeouts, 5xx, network errors; a 404 means the site is up) the
+// host is marked open for CIRCUIT_OPEN_MS: callers fail immediately instead
+// of each burning a slot for timeout x retries. One probe is let through
+// afterwards; a success closes the circuit, a failure re-opens it.
+const CIRCUIT_FAILURES = positiveIntEnv(process.env.HTTP_CIRCUIT_FAILURES, 5);
+const CIRCUIT_OPEN_MS = positiveIntEnv(process.env.HTTP_CIRCUIT_OPEN_MS, 30000);
+const circuits = new Map();
+
+function circuitFor(url) {
+    const host = new URL(url).host;
+    let c = circuits.get(host);
+    if (!c) { c = { host, failures: 0, openedAt: 0, probing: false }; circuits.set(host, c); }
+    return c;
+}
+
+function assertCircuitClosed(c) {
+    if (!c.openedAt) return;
+    const since = Date.now() - c.openedAt;
+    if (since < CIRCUIT_OPEN_MS) {
+        throw new UpstreamUnavailableError(`${c.host}: circuit open after ${c.failures} consecutive failures, retrying in ${Math.ceil((CIRCUIT_OPEN_MS - since) / 1000)}s`, { code: 'CIRCUIT_OPEN' });
+    }
+    if (c.probing) throw new UpstreamUnavailableError(`${c.host}: circuit half-open, a probe request is in flight`, { code: 'CIRCUIT_OPEN' });
+    c.probing = true;
+}
+
+function recordOutcome(c, err) {
+    if (!err || err instanceof UpstreamNotFoundError) {
+        if (c.openedAt) console.warn(`[http] circuit CLOSED for ${c.host}`);
+        c.failures = 0; c.openedAt = 0; c.probing = false;
+        return;
+    }
+    c.probing = false;
+    if (!(err instanceof UpstreamUnavailableError) || err.code === 'CIRCUIT_OPEN') return; // queue timeouts are not upstream failures
+    c.failures++;
+    if (c.failures >= CIRCUIT_FAILURES) {
+        if (!c.openedAt) console.warn(`[http] circuit OPEN for ${c.host} after ${c.failures} consecutive failures`);
+        c.openedAt = Date.now();
+    }
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN', 'ENOTFOUND', 'ECONNREFUSED', 'EPIPE', 'ERR_NETWORK', 'ERR_BAD_RESPONSE']);
@@ -104,15 +145,20 @@ async function fetchWithRetry(url, opts) {
 function fetchHtml(url, { userAgent = DEFAULT_USER_AGENT, timeoutMs = TIMEOUT_MS, retries } = {}) {
     const existing = inflight.get(url);
     if (existing) return existing;
+    const circuit = circuitFor(url);
+    try { assertCircuitClosed(circuit); } catch (err) { return Promise.reject(err); }
     const promise = semaphore
         .run(() => fetchWithRetry(url, { userAgent, timeoutMs, retries }), QUEUE_TIMEOUT_MS)
+        .then((html) => { recordOutcome(circuit, null); return html; }, (err) => { recordOutcome(circuit, err); throw err; })
         .finally(() => { if (inflight.get(url) === promise) inflight.delete(url); });
     inflight.set(url, promise);
     return promise;
 }
 
 function stats() {
-    return { ...semaphore.stats(), inflight: inflight.size };
+    const now = Date.now();
+    const hosts = Object.fromEntries([...circuits.values()].map((c) => [c.host, { consecutiveFailures: c.failures, open: !!c.openedAt && now - c.openedAt < CIRCUIT_OPEN_MS }]));
+    return { ...semaphore.stats(), inflight: inflight.size, circuits: hosts };
 }
 
 module.exports = {

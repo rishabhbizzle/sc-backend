@@ -1,4 +1,5 @@
 'use strict';
+process.env.CRON_SPOTIFY_PACING_MS = '0'; // stubbed Spotify, no need to pace
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');

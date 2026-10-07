@@ -1,4 +1,6 @@
 'use strict';
+process.env.HTTP_CIRCUIT_FAILURES = '4'; // earlier tests in this file produce 3 failures before a success resets the count
+process.env.HTTP_CIRCUIT_OPEN_MS = '600';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -63,4 +65,17 @@ test('identical in-flight URLs share one upstream request', async () => {
     assert.equal(stats().inflight, 0, 'in-flight entry is cleared after settling');
     await fetchHtml(`${base}/dedupe`);
     assert.equal(hits['/dedupe'], 2, 'a later call fetches again');
+});
+
+test('circuit breaker: repeated upstream failures fail fast, then a probe closes it again', async () => {
+    const host = `http://localhost:${server.address().port}`; // distinct host string from 127.0.0.1 => its own circuit
+    for (let i = 0; i < 4; i++) await assert.rejects(fetchHtml(`${host}/boom`, { retries: 0 }), UpstreamUnavailableError);
+    assert.equal(hits['/boom'], 4);
+    await assert.rejects(fetchHtml(`${host}/boom`, { retries: 0 }), (err) => err.code === 'CIRCUIT_OPEN' && /circuit open/.test(err.message));
+    assert.equal(hits['/boom'], 4, 'open circuit makes no upstream request');
+    assert.equal(stats().circuits[`localhost:${server.address().port}`].open, true);
+    await sleep(700);
+    assert.match(await fetchHtml(`${host}/ok`), /<table>/, 'half-open probe goes through');
+    assert.equal(stats().circuits[`localhost:${server.address().port}`].open, false);
+    assert.equal(stats().circuits[`localhost:${server.address().port}`].consecutiveFailures, 0);
 });
