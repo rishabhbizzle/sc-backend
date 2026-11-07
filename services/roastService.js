@@ -33,36 +33,36 @@ class RoastUpstreamError extends Error {
     }
 }
 
-const cleanString = (value, field) => {
-    if (typeof value !== 'string') throw new RoastInputError(`${field} must be a string`);
-    // collapse whitespace/newlines so user text can't restructure the prompt
-    const s = value.replace(/\s+/g, ' ').trim().slice(0, MAX_STRING);
-    if (!s) throw new RoastInputError(`${field} must not be empty`);
-    return s;
-};
+// collapse whitespace/newlines so user text can't restructure the prompt;
+// returns '' for anything that isn't a usable string
+const cleanString = (value) =>
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, MAX_STRING) : '';
 
 // Accepts { topSongs: [{ name, artist }], topArtists: [string] } (the shape the
-// frontend's formatDataForWrappedBanner produces) and returns a normalised copy,
-// or throws RoastInputError.
+// frontend's formatDataForWrappedBanner produces; extra fields are ignored) and
+// returns a normalised copy. Unusable entries (e.g. a local file with no
+// artist) are dropped rather than failing the whole roast. Throws
+// RoastInputError for a malformed payload, oversized lists, or nothing usable.
 const validateRoastInput = (userData) => {
     if (!userData || typeof userData !== 'object' || Array.isArray(userData)) {
         throw new RoastInputError('Please provide userData');
     }
-    const { topSongs, topArtists } = userData;
+    const topSongs = userData.topSongs ?? [];
+    const topArtists = userData.topArtists ?? [];
     if (!Array.isArray(topSongs) || !Array.isArray(topArtists)) {
         throw new RoastInputError('topSongs and topArtists must be arrays');
     }
     if (topSongs.length > MAX_ITEMS || topArtists.length > MAX_ITEMS) {
         throw new RoastInputError(`At most ${MAX_ITEMS} songs and ${MAX_ITEMS} artists`);
     }
-    if (topSongs.length === 0 && topArtists.length === 0) {
+    const songs = topSongs
+        .map((t) => (t && typeof t === 'object' ? { name: cleanString(t.name), artist: cleanString(t.artist) } : null))
+        .filter((t) => t && t.name)
+        .map((t) => ({ name: t.name, artist: t.artist || 'unknown artist' }));
+    const artists = topArtists.map(cleanString).filter(Boolean);
+    if (songs.length === 0 && artists.length === 0) {
         throw new RoastInputError('Nothing to roast');
     }
-    const songs = topSongs.map((t, i) => {
-        if (!t || typeof t !== 'object') throw new RoastInputError(`topSongs[${i}] must be an object`);
-        return { name: cleanString(t.name, `topSongs[${i}].name`), artist: cleanString(t.artist, `topSongs[${i}].artist`) };
-    });
-    const artists = topArtists.map((a, i) => cleanString(a, `topArtists[${i}]`));
     return { topSongs: songs, topArtists: artists };
 };
 

@@ -9,18 +9,30 @@ test('validateRoastInput normalises whitespace, trims and caps lengths', () => {
     assert.equal(out.topArtists[0].length, 100);
 });
 
-test('validateRoastInput rejects bad shapes', () => {
+test('validateRoastInput rejects malformed payloads, oversized lists and empty input', () => {
     const bad = [
         undefined, null, 'str', [], {},
         { topSongs: 'x', topArtists: [] },
+        { topSongs: [], topArtists: {} },
         { topSongs: [], topArtists: [] },
-        { topSongs: [{ name: 'a' }], topArtists: [] },
-        { topSongs: [{ name: 'a', artist: '   ' }], topArtists: [] },
-        { topSongs: [], topArtists: [42] },
-        { topSongs: [null], topArtists: [] },
+        { topSongs: [{ name: '   ' }, null, 7], topArtists: [42, ''] },
         { topSongs: [], topArtists: Array(11).fill('a') },
+        { topSongs: Array(11).fill({ name: 'a', artist: 'b' }), topArtists: [] },
     ];
     for (const b of bad) assert.throws(() => validateRoastInput(b), RoastInputError, JSON.stringify(b));
+});
+
+test('validateRoastInput drops unusable entries instead of failing the roast', () => {
+    const out = validateRoastInput({
+        topSongs: [{ name: 'Local file', artist: '' }, null, { artist: 'no name' }, { name: 'Espresso', artist: 'Sabrina Carpenter', playcount: 9 }],
+        topArtists: ['Sabrina Carpenter', undefined, '  '],
+        coverImg: 'ignored',
+    });
+    assert.deepEqual(out, {
+        topSongs: [{ name: 'Local file', artist: 'unknown artist' }, { name: 'Espresso', artist: 'Sabrina Carpenter' }],
+        topArtists: ['Sabrina Carpenter'],
+    });
+    assert.deepEqual(validateRoastInput({ topArtists: ['A'] }), { topSongs: [], topArtists: ['A'] }, 'missing lists default to []');
 });
 
 test('roastCacheKey is stable for equivalent input and differs otherwise', () => {
