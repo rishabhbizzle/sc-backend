@@ -21,4 +21,13 @@ const heavyRateLimitMiddleware = setRateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { rateLimitMiddleware, heavyRateLimitMiddleware };
+// The AI roast costs real money per call, so it gets a small per-IP budget.
+const roastRateLimitMiddleware = setRateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: positiveIntEnv(process.env.ROAST_RATE_LIMIT_MAX, 5),
+  message: { status: "error", message: "You've been roasted enough for now, try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware };

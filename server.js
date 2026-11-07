@@ -8,7 +8,8 @@ const port = parseInt(process.env.API_PORT, 10) > 0 ? parseInt(process.env.API_P
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
-const { rateLimitMiddleware, heavyRateLimitMiddleware } = require('./utilities/rateLimiter');
+const { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware } = require('./utilities/rateLimiter');
+const { validateRoastInput, generateRoast, roastCacheKey, createDailyBudget, RoastInputError } = require('./services/roastService');
 const browserPool = require('./utilities/browser');
 const { closeBrowser } = browserPool;
 const httpClient = require('./utilities/http');
@@ -37,7 +38,12 @@ const verifyClerkToken = async (req, res, next) => {
         }
 
         const token = authHeader.split(' ')[1];
-        const payload = await clerkClient.verifyToken(token);
+        // With CLERK_JWT_KEY (the instance's PEM public key from the Clerk
+        // dashboard) tokens are verified offline; without it the SDK fetches
+        // the JWKS from Clerk as before.
+        const payload = process.env.CLERK_JWT_KEY
+            ? await clerkClient.verifyToken(token, { jwtKey: process.env.CLERK_JWT_KEY })
+            : await clerkClient.verifyToken(token);
 
         if (!payload || !payload.sub) {
             return res.status(401).json({ status: 'error', message: 'Invalid token' });
@@ -306,70 +312,90 @@ app.get('/api/v1/album/:id', async (req, res) => {
 });
 
 
-app.post('/api/v1/user/isFavourite', async (req, res) => {
+// User routes: the user id always comes from the verified Clerk token
+// (req.userId), never from the request body or URL, so one user can't read or
+// change another user's favourites.
+app.post('/api/v1/user/isFavourite', verifyClerkToken, async (req, res) => {
     try {
-        const { id, spotifyId, type } = req.body;
-        if (!id || !spotifyId || !type) {
-            return res.json({ status: 'error', message: 'Please provide all required fields' });
-        }
-
-        const data = await isUserFavorite(type, spotifyId, id);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.get('/api/v1/user/dashboard/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!id) {
-            return res.json({ status: 'error', message: 'Please provide all required fields' });
-        }
-
-        const data = await getDashboardArtistRankingData(id);
-        return res.status(200).json({ status: 'success', data: data });
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
-    }
-});
-
-app.post('/api/v1/user/markFavourite', async (req, res) => {
-    try {
-        const { id, type, spotifyId, image, name } = req.body;
-        if (!id || !spotifyId || !type || !image || !name) {
+        const { spotifyId, type } = req.body || {};
+        if (!spotifyId || !type) {
             return res.status(400).json({ status: 'error', message: 'Please provide all required fields' });
         }
 
-        const data = await markFavourite(id, type, spotifyId, image, name);
+        const data = await isUserFavorite(type, spotifyId, req.userId);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
-        return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
+        return res.status(500).json({ status: 'error', message: 'Something went wrong' });
     }
 });
 
-app.get('/api/v1/user/favourites/:id', async (req, res) => {
+app.get('/api/v1/user/dashboard', verifyClerkToken, async (req, res) => {
     try {
-        const { id } = req.params;
-        if (!id) {
-            return res.json({ status: 'error', message: 'Please provide all required fields' });
+        const data = await getDashboardArtistRankingData(req.userId);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: 'Something went wrong' });
+    }
+});
+
+app.post('/api/v1/user/markFavourite', verifyClerkToken, async (req, res) => {
+    try {
+        const { type, spotifyId, image, name } = req.body || {};
+        if (!spotifyId || !type || !image || !name) {
+            return res.status(400).json({ status: 'error', message: 'Please provide all required fields' });
         }
 
-        const data = await getUserFavourites(id);
+        const data = await markFavourite(req.userId, type, spotifyId, image, name);
         return res.status(200).json({ status: 'success', data: data });
     } catch (error) {
         console.error(error);
+        // markFavourite throws user-facing messages (e.g. the 5-artist cap)
         return res.status(500).json({ status: 'error', message: error?.message || 'Something went wrong' });
-
     }
 });
 
+app.get('/api/v1/user/favourites', verifyClerkToken, async (req, res) => {
+    try {
+        const data = await getUserFavourites(req.userId);
+        return res.status(200).json({ status: 'success', data: data });
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({ status: 'error', message: 'Something went wrong' });
+    }
+});
+
+
+// AI roast of a user's top tracks/artists. Open to anonymous users (Replay
+// doesn't need a StatsCrave login), so it is bounded three ways: a per-IP
+// limit, a global daily cap on actual Gemini calls, and a 24h cache keyed on
+// the normalised input so the same top lists never cost twice.
+const roastBudget = createDailyBudget(positiveIntEnv(process.env.ROAST_DAILY_CAP, 500));
+class RoastCapError extends Error { constructor() { super('daily roast cap reached'); this.name = 'RoastCapError'; } }
+
+app.post('/api/v1/roast', roastRateLimitMiddleware, async (req, res) => {
+    let input;
+    try {
+        input = validateRoastInput(req.body?.userData);
+    } catch (error) {
+        if (error instanceof RoastInputError) return res.status(400).json({ status: 'error', message: error.message });
+        throw error;
+    }
+    try {
+        const roast = await withCache(roastCacheKey(input), 24 * 60 * 60, () => {
+            if (!roastBudget.take()) throw new RoastCapError();
+            return generateRoast(input);
+        });
+        return res.status(200).json({ status: 'success', data: { roastData: roast } });
+    } catch (error) {
+        if (error?.name === 'RoastCapError') {
+            return res.status(429).json({ status: 'error', message: 'The roast machine needs a break, try again tomorrow.' });
+        }
+        console.error('Roast failed:', error?.message);
+        return res.status(502).json({ status: 'error', message: 'Could not generate a roast right now, please try again later.' });
+    }
+});
 
 app.get('/api/v1/others/getRecomendations', async (req, res) => {
     try {

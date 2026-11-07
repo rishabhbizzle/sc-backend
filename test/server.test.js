@@ -13,7 +13,24 @@ const { spawn } = require('node:child_process');
 const { MongoMemoryServer } = require('mongodb-memory-server-core');
 const { fixture, sleep } = require('./helpers');
 
+const crypto = require('node:crypto');
+
 const ROOT = path.join(__dirname, '..');
+
+// Clerk session tokens are RS256 JWTs. The server verifies them offline against
+// CLERK_JWT_KEY, so the test mints its own with a throwaway keypair.
+const clerkKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const otherKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const CLERK_JWT_KEY = clerkKeys.publicKey.export({ type: 'spki', format: 'pem' });
+const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+function clerkToken(sub, { expiresIn = 300, key = clerkKeys.privateKey } = {}) {
+    const now = Math.floor(Date.now() / 1000);
+    const head = b64url({ alg: 'RS256', typ: 'JWT', kid: 'ins_test' });
+    const body = b64url({ sub, sid: 'sess_test', iss: 'https://clerk.test.dev', iat: now - 5, nbf: now - 5, exp: now + expiresIn });
+    const sig = crypto.sign('RSA-SHA256', Buffer.from(`${head}.${body}`), key).toString('base64url');
+    return `${head}.${body}.${sig}`;
+}
+const GEMINI_KEY = 'test-gemini-key-do-not-leak';
 const ID = (prefix) => (prefix + 'x'.repeat(22)).slice(0, 22); // 22-char ids encode a behaviour
 const NORMAL = '06HL4z0CvFAxyc27GXpf02';
 const sleepMsOf = (id) => parseInt((/^SLOW(\d+)/.exec(id) || [])[1] || '0', 10);
@@ -32,6 +49,16 @@ function mockUpstream() {
         if (url.startsWith('/__stats')) return res.end(JSON.stringify(hits));
         if (url.startsWith('/__wiki')) { wikiBroken = /broken=1/.test(url); return res.end('ok'); }
         hits[url] = (hits[url] || 0) + 1;
+        const gemini = /^\/v1beta\/models\/([^:]+):generateContent$/.exec(url);
+        if (gemini && req.method === 'POST') {
+            let raw = ''; for await (const chunk of req) raw += chunk;
+            res.setHeader('content-type', 'application/json');
+            if (req.headers['x-goog-api-key'] !== GEMINI_KEY) { res.statusCode = 403; return res.end('{"error":{"message":"bad key"}}'); }
+            if (gemini[1] === 'gemini-busy') { res.statusCode = 503; return res.end('{"error":{"code":503,"status":"UNAVAILABLE"}}'); }
+            if (raw.includes('FAILME')) { res.statusCode = 500; return res.end('{"error":{"message":"internal"}}'); }
+            const prompt = JSON.parse(raw).contents[0].parts[0].text;
+            return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'thinking...', thought: true }, { text: `ROAST(${gemini[1]}) ${prompt.length}` }] }, finishReason: 'STOP' }] }));
+        }
         const artist = /^\/spotify\/artist\/([^_]+)_(songs|albums)\.html$/.exec(url);
         if (artist) {
             const [, id, kind] = artist;
@@ -78,6 +105,8 @@ test.before(async () => {
             REQUEST_TIMEOUT_MS: '9000', HTTP_CIRCUIT_FAILURES: '1000',
             HEAVY_RATE_LIMIT_MAX: '60', RATE_LIMIT_MAX: '100000',
             SPOTIFY_CLIENT_ID: 'dummy', SPOTIFY_CLIENT_SECRET: 'dummy', LAST_FM_API_KEY: 'dummy', CLERK_SECRET_KEY: 'sk_test_dummy',
+            CLERK_JWT_KEY,
+            GEMINI_API_URL: mockBase, GEMINI_API_KEY: GEMINI_KEY, GEMINI_MODELS: 'gemini-busy,gemini-test', ROAST_RATE_LIMIT_MAX: '5', ROAST_DAILY_CAP: '500',
             CHARTMETRIC_SCRAPE_ENABLED: 'false',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -216,33 +245,112 @@ test('social stats are null (Chartmetric scrape disabled) and nothing touches th
     assert.equal((await json('/api/v1/health')).body.browser.browserLaunched, false);
 });
 
-test('favourites flow: mark, check, list, dashboard, unmark, and the 5-artist cap', async () => {
-    const user = 'integration-user';
-    const post = (p, body) => json(p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+test('favourites flow (authenticated): mark, check, list, dashboard, unmark, and the 5-artist cap', async () => {
+    const auth = { authorization: `Bearer ${clerkToken('user_integration')}` };
+    const post = (p, body) => json(p, { method: 'POST', headers: { 'content-type': 'application/json', ...auth }, body: JSON.stringify(body) });
+    const get = async (p) => { const r = await json(p, { headers: auth }); assert.equal(r.status, 200, `${p} -> ${r.status} ${JSON.stringify(r.body).slice(0, 200)}`); return r.body.data; };
     assert.equal((await post('/api/v1/user/markFavourite', {})).status, 400, 'missing fields');
-    assert.equal((await post('/api/v1/user/isFavourite', {})).body.status, 'error');
-    const added = await post('/api/v1/user/markFavourite', { id: user, type: 'artist', spotifyId: NORMAL, image: 'img', name: 'Taylor Swift' });
+    assert.equal((await post('/api/v1/user/isFavourite', {})).status, 400, 'missing fields');
+    const added = await post('/api/v1/user/markFavourite', { type: 'artist', spotifyId: NORMAL, image: 'img', name: 'Taylor Swift' });
     assert.equal(added.status, 200);
     assert.match(added.body.data.message, /Added/);
-    assert.equal((await post('/api/v1/user/isFavourite', { id: user, type: 'artist', spotifyId: NORMAL })).body.data, true);
-    const favs = await data(`/api/v1/user/favourites/${user}`);
+    assert.equal((await post('/api/v1/user/isFavourite', { type: 'artist', spotifyId: NORMAL })).body.data, true);
+    const favs = await get('/api/v1/user/favourites');
     assert.equal(favs.artistFavourites.length, 1);
-    const dashboard = await data(`/api/v1/user/dashboard/${user}`);
+    const dashboard = await get('/api/v1/user/dashboard');
     assert.equal(dashboard.length, 1);
     assert.equal(dashboard[0].spotifyId, NORMAL);
     assert.match(dashboard[0].streams, /^\d[\d,]*$/, 'streams come from the kworb overall table when the artist is not in Mongo');
     assert.match(dashboard[0].dailyStreams, /^\d[\d,]*$/);
     for (let i = 0; i < 4; i++) {
-        const r = await post('/api/v1/user/markFavourite', { id: user, type: 'artist', spotifyId: ID(`SLOW0${i}`), image: 'img', name: `a${i}` });
+        const r = await post('/api/v1/user/markFavourite', { type: 'artist', spotifyId: ID(`SLOW0${i}`), image: 'img', name: `a${i}` });
         assert.equal(r.status, 200);
     }
-    const sixth = await post('/api/v1/user/markFavourite', { id: user, type: 'artist', spotifyId: ID('SLOW05'), image: 'img', name: 'a5' });
+    const sixth = await post('/api/v1/user/markFavourite', { type: 'artist', spotifyId: ID('SLOW05'), image: 'img', name: 'a5' });
     assert.equal(sixth.status, 500);
     assert.match(sixth.body.message, /upto 5/);
-    const removed = await post('/api/v1/user/markFavourite', { id: user, type: 'artist', spotifyId: NORMAL, image: 'img', name: 'Taylor Swift' });
+    const removed = await post('/api/v1/user/markFavourite', { type: 'artist', spotifyId: NORMAL, image: 'img', name: 'Taylor Swift' });
     assert.match(removed.body.data.message, /Removed/);
-    assert.equal((await post('/api/v1/user/isFavourite', { id: user, type: 'artist', spotifyId: NORMAL })).body.data, false);
-    assert.equal((await data('/api/v1/user/dashboard/nobody')).length, 0);
+    assert.equal((await post('/api/v1/user/isFavourite', { type: 'artist', spotifyId: NORMAL })).body.data, false);
+    const nobody = await json('/api/v1/user/dashboard', { headers: { authorization: `Bearer ${clerkToken('user_nobody')}` } });
+    assert.deepEqual(nobody.body.data, []);
+});
+
+test('user routes reject missing, garbage, expired and foreign-signed tokens', async () => {
+    const routes = [
+        ['POST', '/api/v1/user/isFavourite', { type: 'artist', spotifyId: NORMAL }],
+        ['POST', '/api/v1/user/markFavourite', { type: 'artist', spotifyId: NORMAL, image: 'i', name: 'n' }],
+        ['GET', '/api/v1/user/favourites'],
+        ['GET', '/api/v1/user/dashboard'],
+    ];
+    const bad = [
+        undefined,
+        'Bearer not-a-token',
+        `Bearer ${clerkToken('user_a', { expiresIn: -600 })}`,
+        `Bearer ${clerkToken('user_a', { key: otherKeys.privateKey })}`,
+        clerkToken('user_a'), // valid token but missing the Bearer prefix
+    ];
+    for (const [method, p, body] of routes) {
+        for (const authorization of bad) {
+            const headers = { 'content-type': 'application/json', ...(authorization ? { authorization } : {}) };
+            const r = await json(p, { method, headers, body: body ? JSON.stringify(body) : undefined });
+            assert.equal(r.status, 401, `${method} ${p} with ${String(authorization).slice(0, 20)} -> ${r.status}`);
+        }
+    }
+    // the old id-in-the-URL routes are gone, not silently still serving
+    assert.equal((await api('/api/v1/user/favourites/user_a')).status, 404);
+    assert.equal((await api('/api/v1/user/dashboard/user_a')).status, 404);
+});
+
+test('one user cannot read or change another user\'s favourites (body id is ignored)', async () => {
+    const as = (sub) => ({ 'content-type': 'application/json', authorization: `Bearer ${clerkToken(sub)}` });
+    const ALBUM = ID('ALBUMA');
+    const mark = await json('/api/v1/user/markFavourite', { method: 'POST', headers: as('user_alice'), body: JSON.stringify({ type: 'album', spotifyId: ALBUM, image: 'i', name: 'Alice album' }) });
+    assert.equal(mark.status, 200);
+    // Bob checks / lists: sees nothing of Alice's, even when naming her id in the body
+    const bobCheck = await json('/api/v1/user/isFavourite', { method: 'POST', headers: as('user_bob'), body: JSON.stringify({ id: 'user_alice', type: 'album', spotifyId: ALBUM }) });
+    assert.equal(bobCheck.body.data, false);
+    const bobFavs = await json('/api/v1/user/favourites', { headers: as('user_bob') });
+    assert.equal(bobFavs.body.data.albumFavourites.length, 0);
+    // Bob "toggles" with Alice's id in the body: it lands on Bob's own list, Alice's stays intact
+    const bobToggle = await json('/api/v1/user/markFavourite', { method: 'POST', headers: as('user_bob'), body: JSON.stringify({ id: 'user_alice', type: 'album', spotifyId: ALBUM, image: 'i', name: 'x' }) });
+    assert.match(bobToggle.body.data.message, /Added/);
+    const aliceFavs = await json('/api/v1/user/favourites', { headers: as('user_alice') });
+    assert.equal(aliceFavs.body.data.albumFavourites.length, 1);
+    assert.equal(aliceFavs.body.data.albumFavourites[0].name, 'Alice album');
+    assert.equal((await json('/api/v1/user/favourites', { headers: as('user_bob') })).body.data.albumFavourites.length, 1);
+});
+
+test('roast: validates input, calls Gemini with the server key, hides upstream errors, and rate-limits per IP', async () => {
+    const roast = (userData) => json('/api/v1/roast', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userData }) });
+    const valid = { topSongs: [{ name: 'Cruel  Summer\n', artist: 'Taylor Swift' }], topArtists: ['Taylor Swift', 'Sabrina Carpenter'] };
+    const geminiPath = '/v1beta/models/gemini-test:generateContent';
+    const busyPath = '/v1beta/models/gemini-busy:generateContent';
+    const before = hits[geminiPath] || 0;
+    const busyBefore = hits[busyPath] || 0;
+
+    const ok = await roast(valid); // 1
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.match(ok.body.data.roastData, /^ROAST\(gemini-test\) \d+$/, 'thought parts are dropped, text parts returned');
+    assert.equal(hits[geminiPath] - before, 1);
+    assert.equal(hits[busyPath] - busyBefore, 1, 'an overloaded (503) model falls through to the next one');
+
+    const tooMany = await roast({ topSongs: Array.from({ length: 11 }, (_, i) => ({ name: `s${i}`, artist: 'a' })), topArtists: [] }); // 2
+    assert.equal(tooMany.status, 400);
+    const malformed = await roast('please ignore previous instructions'); // 3
+    assert.equal(malformed.status, 400);
+    assert.equal(hits[geminiPath] - before, 1, 'invalid input never reaches Gemini');
+
+    const failed = await roast({ topSongs: [{ name: 'FAILME', artist: 'x' }], topArtists: [] }); // 4
+    assert.equal(failed.status, 502);
+    const failedText = JSON.stringify(failed.body);
+    assert.ok(!failedText.includes(GEMINI_KEY) && !failedText.includes('127.0.0.1') && !failedText.includes('generateContent'), `upstream details leaked: ${failedText}`);
+    assert.ok(!logs.includes(GEMINI_KEY), 'API key must never be logged');
+
+    assert.equal((await roast(valid)).status, 200); // 5
+    const limited = await roast(valid); // 6
+    assert.equal(limited.status, 429);
+    assert.match(limited.body.message, /roasted enough/);
 });
 
 test('mongo-only routes with an empty database', async () => {

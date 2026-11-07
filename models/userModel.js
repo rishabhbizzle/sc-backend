@@ -23,7 +23,8 @@ const userFavoriteSchema = new mongoose.Schema({
     },
 });
 
-
+// Every favourites query filters by user (and usually type + spotifyId).
+userFavoriteSchema.index({ kindeId: 1, type: 1, spotifyId: 1 });
 
 const UserFavorite = mongoose.models.userFavorites || mongoose.model("userFavorites", userFavoriteSchema);
 
