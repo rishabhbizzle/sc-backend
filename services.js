@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { normalizePreRelease, normalizeLatest } = require('./services/releases');
 const { withPage } = require('./utilities/browser');
 const { SpotifyApi } = require('@spotify/web-api-ts-sdk');
 const Album = require('./models/albumModel');
@@ -178,6 +179,9 @@ const getArtistSpotifyApiData = async (id) => {
                 otherStats: additionalData?.stats,
                 visuals: additionalData?.visuals,
                 preRelease: additionalData?.preRelease,
+                // parsed forms for the countdown / "out now" cards
+                upcomingRelease: normalizePreRelease(additionalData?.preRelease),
+                latestRelease: normalizeLatest(additionalData?.discography?.latest),
 
             } : {})
         }

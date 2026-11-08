@@ -419,6 +419,70 @@ test('milestone and insight routes serve the precomputed snapshots; bad params a
     }
 });
 
+test('streamdle over HTTP: puzzle without totals, per-round answers, signed-in results and stats', async () => {
+    const mongoose = require('mongoose');
+    const Insight = require('../models/insightModel');
+    await mongoose.connect(mongod.getUri(), { dbName: 'prod' });
+    try {
+        await Insight.insertMany(Array.from({ length: 120 }, (_, i) => ({
+            type: 'song', spotifyId: `GAME${String(i).padStart(3, '0')}`.padEnd(22, 'x'), name: `Game Song ${i}`, artistName: 'A', image: 'https://i.scdn.co/x', total: Math.round(1e8 * 1.03 ** i),
+        })));
+    } finally {
+        await mongoose.disconnect();
+    }
+    const game = await data('/api/v1/game/today');
+    assert.equal(game.gameDate, new Date().toISOString().slice(0, 10));
+    assert.equal(game.rounds.length, 10);
+    assert.equal(JSON.stringify(game).includes('total'), false, 'answers are not in the puzzle');
+    assert.deepEqual(await data('/api/v1/game/today'), game, 'stable for the day');
+
+    const post = (p, body, headers = {}) => json(p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    const picks = [];
+    for (let round = 0; round < 10; round++) {
+        const r = await post('/api/v1/game/answer', { gameDate: game.gameDate, round, pick: 'a' });
+        assert.equal(r.status, 200);
+        const { correct, answer, a, b } = r.body.data;
+        assert.equal(correct, answer === 'a');
+        assert.equal(answer, a.total > b.total ? 'a' : 'b');
+        picks.push('a');
+    }
+    assert.equal((await post('/api/v1/game/answer', { gameDate: '2001-01-01', round: 0, pick: 'a' })).status, 400);
+    assert.equal((await post('/api/v1/game/answer', { gameDate: game.gameDate, round: 0, pick: 'z' })).status, 400);
+
+    assert.equal((await post('/api/v1/game/result', { gameDate: game.gameDate, picks })).status, 401, 'results need a login');
+    const token = clerkToken('user_streamdle');
+    const saved = await post('/api/v1/game/result', { gameDate: game.gameDate, picks, score: 10 }, { Authorization: `Bearer ${token}` });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.data.saved, true);
+    assert.equal(saved.body.data.stats.played, 1);
+    assert.equal(saved.body.data.stats.currentStreak, 1);
+    assert.equal(saved.body.data.stats.today.score, saved.body.data.score);
+    const dup = await post('/api/v1/game/result', { gameDate: game.gameDate, picks: picks.map(() => 'b') }, { Authorization: `Bearer ${token}` });
+    assert.equal(dup.body.data.alreadySubmitted, true);
+    const me = await json('/api/v1/game/me', { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(me.status, 200);
+    assert.equal(me.body.data.played, 1);
+    assert.equal((await json('/api/v1/game/me')).status, 401);
+});
+
+test('debuts, race, tracked search and releases routes: shapes and validation', async () => {
+    assert.deepEqual(await data('/api/v1/debuts?type=album'), []);
+    assert.deepEqual(await data('/api/v1/debuts?type=song&status=live'), []);
+    assert.deepEqual(await data('/api/v1/releases'), []);
+    assert.deepEqual(await data('/api/v1/releases?status=out'), []);
+    const found = await data('/api/v1/tracked/search?type=song&q=game%20song%201');
+    assert.ok(found.length > 0 && found.every((f) => /game song 1/i.test(f.name)));
+    const ids = found.slice(0, 2).map((f) => f.spotifyId).join(',');
+    assert.equal((await json(`/api/v1/race?type=song&ids=${ids}`)).status, 404, 'no daily history for these -> 404');
+    for (const p of [
+        '/api/v1/debuts?type=artist',
+        '/api/v1/debuts/compare?type=album&ids=short',
+        '/api/v1/race?type=song&ids=ONLYONE0000000000000000',
+        '/api/v1/tracked/search?type=song&q=a',
+        '/api/v1/releases?status=never',
+    ]) assert.equal((await json(p)).status, 400, p);
+});
+
 test('spotify-backed routes answer with a JSON error (not a hang) when Spotify rejects the credentials', async () => {
     for (const p of ['/api/v1/songs/top?limit=5', '/api/v1/others/new-releases?limit=5', '/api/v1/songs/viral']) {
         const t0 = Date.now();

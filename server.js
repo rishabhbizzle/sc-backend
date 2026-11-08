@@ -8,7 +8,7 @@ const port = parseInt(process.env.API_PORT, 10) > 0 ? parseInt(process.env.API_P
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
-const { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware } = require('./utilities/rateLimiter');
+const { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware, gameRateLimitMiddleware } = require('./utilities/rateLimiter');
 const { validateRoastInput, generateRoast, roastCacheKey, createDailyBudget, RoastInputError } = require('./services/roastService');
 const browserPool = require('./utilities/browser');
 const { closeBrowser } = browserPool;
@@ -17,6 +17,9 @@ const { positiveIntEnv } = require('./utilities/semaphore');
 const cronController = require('./cron/controller');
 const { WikipediaLayoutError } = require('./scrapers/wikipedia');
 const milestones = require('./services/milestones');
+const debutsService = require('./services/debuts');
+const streamdle = require('./services/streamdle');
+const releasesService = require('./services/releases');
 const { Redis } = require("ioredis");
 const { createClerkClient } = require('@clerk/clerk-sdk-node');
 const {
@@ -199,6 +202,9 @@ const sendError = (res, error) => {
     if (name === 'BadRequestError') {
         return sendJson(res, 400, { status: 'error', message });
     }
+    if (name === 'GameNotReadyError') {
+        return sendJson(res, 503, { status: 'error', message });
+    }
     if (error instanceof WikipediaLayoutError) {
         console.error('Wikipedia layout changed:', message);
         return sendJson(res, 502, { status: 'error', message: 'Records source layout changed; this list needs a parser update', detail: message });
@@ -293,6 +299,76 @@ insightRoute('/api/v1/insights/:type/:id', {
     key: (p) => `insight-${p.type}-${p.id}`,
     fetch: (p) => milestones.getInsight(p),
     notFound: true,
+});
+
+// Debut wars, races, tracked-item search (precomputed snapshots; cheap reads).
+insightRoute('/api/v1/debuts', {
+    parse: (r) => debutsService.parseDebuts(r.query),
+    key: (p) => `debuts-${p.type}-${p.status}-${p.limit}`,
+    fetch: (p) => debutsService.debuts(p),
+});
+insightRoute('/api/v1/debuts/compare', {
+    parse: (r) => debutsService.parseCompare(r.query),
+    key: (p) => `debuts-compare-${p.type}-${p.ids.join(',')}`,
+    fetch: (p) => debutsService.compareDebuts(p),
+});
+insightRoute('/api/v1/race', {
+    parse: (r) => debutsService.parseRace(r.query),
+    key: (p) => `race-${p.type}-${p.ids.join(',')}`,
+    fetch: (p) => debutsService.race(p),
+    notFound: true,
+});
+insightRoute('/api/v1/tracked/search', {
+    parse: (r) => debutsService.parseSearch(r.query),
+    key: (p) => `tracked-search-${p.type}-${p.debutOnly ? 1 : 0}-${p.limit}-${p.q.toLowerCase()}`,
+    fetch: (p) => debutsService.search(p),
+});
+
+// Releases: countdowns to announced releases + the day-one tracker.
+app.get('/api/v1/releases', async (req, res) => {
+    try {
+        const p = releasesService.parseReleases(req.query);
+        const data = await withCache(`releases-${p.status}`, FIVE_MINUTES * 3, () => releasesService.listReleases(p));
+        return sendJson(res, 200, { status: 'success', data });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+
+// Streamdle. Today's puzzle is made on first request if the nightly job
+// hasn't made it yet; answers are revealed one round at a time.
+app.get('/api/v1/game/today', async (req, res) => {
+    try {
+        const gameDate = streamdle.utcDate();
+        const data = await withCache(`streamdle-${gameDate}`, ONE_HOUR, async () => streamdle.publicGame(await streamdle.ensureGame(gameDate)));
+        return sendJson(res, 200, { status: 'success', data });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+app.post('/api/v1/game/answer', gameRateLimitMiddleware, async (req, res) => {
+    try {
+        const data = await streamdle.answer(streamdle.parseAnswer(req.body));
+        return sendJson(res, 200, { status: 'success', data });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+app.post('/api/v1/game/result', gameRateLimitMiddleware, verifyClerkToken, async (req, res) => {
+    try {
+        const saved = await streamdle.submitResult(req.userId, streamdle.parseResult(req.body));
+        const stats = await streamdle.stats(req.userId);
+        return sendJson(res, 200, { status: 'success', data: { ...saved, stats } });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+app.get('/api/v1/game/me', verifyClerkToken, async (req, res) => {
+    try {
+        return sendJson(res, 200, { status: 'success', data: await streamdle.stats(req.userId) });
+    } catch (error) {
+        return sendError(res, error);
+    }
 });
 
 // Liveness + a quick look at the moving parts (pool/queue sizes, cron state).

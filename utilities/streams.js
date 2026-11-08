@@ -121,6 +121,38 @@ function isRecord(s, { minHistory = 30 } = {}) {
 const addDays = (date, days) => new Date(date.getTime() + days * DAY_MS);
 const daysBetween = (a, b) => Math.round((b.getTime() - a.getTime()) / DAY_MS);
 
+// First-`length`-days performance from a full "YYYY-MM-DD" release date.
+// Needs the release day itself in the history (we only know a debut if we
+// tracked it from day one). Returns null when there is no debut to report.
+//   days        streams on day 1..length (null for a missing day / not yet)
+//   daysCounted days elapsed so far (max `length`)
+//   complete    all `length` days elapsed and present
+function debut(s, releaseDate, { length = 7, asOf } = {}) {
+    if (typeof releaseDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(releaseDate) || !s.length) return null;
+    const rel = new Date(`${releaseDate}T00:00:00Z`);
+    if (Number.isNaN(rel.getTime())) return null;
+    const byTime = new Map(s.map((p) => [p.date.getTime(), p.value]));
+    if (!byTime.has(rel.getTime())) return null;
+    const last = asOf || s[s.length - 1].date;
+    const elapsed = daysBetween(rel, last) + 1;
+    if (elapsed < 1) return null;
+    const daysCounted = Math.min(length, elapsed);
+    const days = [];
+    for (let i = 0; i < length; i++) {
+        const v = i < daysCounted ? byTime.get(addDays(rel, i).getTime()) : undefined;
+        days.push(typeof v === 'number' ? v : null);
+    }
+    const present = days.filter((v) => v != null);
+    return {
+        releaseDate,
+        days,
+        day1: days[0],
+        total: present.reduce((sum, v) => sum + v, 0),
+        daysCounted,
+        complete: daysCounted === length && present.length === length,
+    };
+}
+
 module.exports = {
     DAY_MS,
     HUNDRED_MILLION,
@@ -140,4 +172,5 @@ module.exports = {
     isRecord,
     addDays,
     daysBetween,
+    debut,
 };

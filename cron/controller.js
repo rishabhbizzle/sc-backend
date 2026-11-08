@@ -9,6 +9,8 @@ const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
 const kworb = require('../scrapers/kworb');
 const insights = require('../services/insights');
+const streamdle = require('../services/streamdle');
+const releases = require('../services/releases');
 const { parseKey } = require('../utilities/streams');
 const { positiveIntEnv, nonNegativeIntEnv } = require('../utilities/semaphore');
 
@@ -69,6 +71,14 @@ const defaultDeps = {
     getAlbum: (id) => safeSpotify(`albums.get(${id})`, (s) => s.albums.get(id)),
     getArtist: (id) => safeSpotify(`artists.get(${id})`, (s) => s.artists.get(id)),
     computeInsights: (opts) => insights.computeInsights(opts),
+    // today's and tomorrow's Streamdle, from the fresh snapshots
+    prepareGames: async () => {
+        const today = streamdle.utcDate();
+        await streamdle.ensureGame(today);
+        await streamdle.ensureGame(streamdle.shiftDate(today, 1));
+        return { ok: true };
+    },
+    refreshReleases: () => releases.refreshReleases(),
 };
 
 // --- helpers ---------------------------------------------------------------
@@ -287,6 +297,7 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
     const results = [];
     let okKeys = [];
     let insightsResult = null;
+    const followUps = {};
     console.log(`[cron] ====== DAILY UPDATE STARTED ${startedAt.toISOString()} ======`);
     try {
         const artists = Array.isArray(artistIds) && artistIds.length
@@ -312,6 +323,17 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
                 console.error('[cron] insights failed:', error);
             }
         }
+        // follow-ups that read the snapshots; each is optional and isolated
+        for (const name of ['prepareGames', 'refreshReleases']) {
+            const step = deps[name] === undefined ? defaultDeps[name] : deps[name];
+            if (typeof step !== 'function') continue;
+            try {
+                followUps[name] = await step();
+            } catch (error) {
+                followUps[name] = { ok: false, error: error && error.message };
+                console.error(`[cron] ${name} failed:`, error);
+            }
+        }
     } catch (error) {
         state.lastError = { at: new Date().toISOString(), message: error && error.message };
         console.error('[cron] run aborted:', error);
@@ -328,6 +350,7 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
         failed: results.filter((r) => !r.ok).map((r) => ({ artistId: r.artistId, error: r.error })),
         dateKeys: okKeys,
         insights: insightsResult,
+        ...followUps,
     };
     state.lastRun = summary;
     console.log(`[cron] ====== DAILY UPDATE DONE: ${summary.ok}/${summary.artists} artists ok in ${Math.round(summary.durationMs / 1000)}s ======`);
