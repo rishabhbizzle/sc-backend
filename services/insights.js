@@ -89,6 +89,8 @@ function buildSnapshot({ type, doc, nameField, dailyField, asOf, asOfKey, existi
         date: day,
         stale: !fresh,
         historyDays: s.length,
+        // first-7-days numbers, only for releases tracked from day one
+        debut: type === 'artist' ? null : streams.debut(s, doc.releaseDate, { asOf: day }),
     };
 
     const events = [];

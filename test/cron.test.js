@@ -35,6 +35,9 @@ function makeDeps({ lastUpdated = '2026-10-06', failSongsFetches = 0, notFound =
         getTrack: async (id) => { calls.getTrack++; return { external_ids: { isrc: `ISRC-${id}` }, album: { images: [{ url: `img-${id}` }], release_date: '2019-08-23' } }; },
         getAlbum: async (id) => { calls.getAlbum++; return { images: [{ url: `aimg-${id}` }], release_date: '2019-08' }; },
         getArtist: async () => { calls.getArtist++; return { name: 'Taylor Swift', followers: { total: 123 }, popularity: 98, genres: ['pop'], images: [{ url: 'artist-img' }] }; },
+        // follow-up steps are covered in their own tests; never touch the network here
+        prepareGames: async () => ({ ok: true, stub: true }),
+        refreshReleases: async () => ({ ok: true, stub: true }),
     };
 }
 
@@ -206,10 +209,16 @@ test('runDailyUpdate rebuilds insights for the newest day and reports them; an i
     assert.equal(snap.releaseDate, '2019-08-23');
     assert.equal(snap.stale, false);
 
+    assert.deepEqual(summary.prepareGames, { ok: true, stub: true });
+    assert.deepEqual(summary.refreshReleases, { ok: true, stub: true });
+
     const deps = makeDeps({ lastUpdated: '2026-10-08' });
     deps.computeInsights = async () => { throw new Error('insights boom'); };
+    deps.refreshReleases = async () => { throw new Error('t4ils down'); };
     const failed = await cron.runDailyUpdate({ delayMs: 0, deps });
     assert.equal(failed.summary.ok, 1, 'the artist data still counts as written');
     assert.deepEqual(failed.summary.insights, { ok: false, error: 'insights boom' });
+    assert.deepEqual(failed.summary.refreshReleases, { ok: false, error: 't4ils down' }, 'a failing follow-up is reported, not thrown');
+    assert.deepEqual(failed.summary.prepareGames, { ok: true, stub: true }, 'and the other follow-ups still run');
     assert.equal(cron.status().running, false);
 });

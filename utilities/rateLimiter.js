@@ -30,4 +30,14 @@ const roastRateLimitMiddleware = setRateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware };
+// Streamdle answers/results: generous for real play (10 answers a game), but
+// stops a script from hammering the answer endpoint.
+const gameRateLimitMiddleware = setRateLimit({
+  windowMs: 60 * 1000,
+  max: positiveIntEnv(process.env.GAME_RATE_LIMIT_MAX, 60),
+  message: { status: "error", message: "Slow down a little and try again in a minute." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { rateLimitMiddleware, heavyRateLimitMiddleware, roastRateLimitMiddleware, gameRateLimitMiddleware };

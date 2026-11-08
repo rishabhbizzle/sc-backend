@@ -27,11 +27,21 @@ const insightSchema = new mongoose.Schema({
     // true when the item has no data for the latest day (dropped off kworb)
     stale: { type: Boolean, default: false },
     historyDays: { type: Number },
+    debut: {
+        releaseDate: String,
+        days: [Number],
+        day1: Number,
+        total: Number,
+        daysCounted: Number,
+        complete: Boolean,
+    },
 }, { timestamps: true });
 
 insightSchema.index({ type: 1, spotifyId: 1 }, { unique: true });
 insightSchema.index({ type: 1, stale: 1, etaDays: 1 });
 insightSchema.index({ type: 1, stale: 1, total: 1 });
+insightSchema.index({ type: 1, 'debut.complete': 1, 'debut.total': -1 });
+insightSchema.index({ type: 1, name: 1 });
 
 const Insight = mongoose.models.insights || mongoose.model("insights", insightSchema);
 

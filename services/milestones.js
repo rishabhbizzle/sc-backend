@@ -13,7 +13,7 @@ const TYPES = ['song', 'album', 'artist'];
 const SPOTIFY_ID_RE = /^[A-Za-z0-9]{22}$/;
 
 // fields exposed to clients (no internal bookkeeping like prevTotal)
-const PUBLIC_FIELDS = 'type spotifyId name image artistSpotifyId artistName releaseDate total daily dailyChangePct avg7 nextMilestone major etaDays etaDate dateKey stale -_id';
+const PUBLIC_FIELDS = 'type spotifyId name image artistSpotifyId artistName releaseDate total daily dailyChangePct avg7 nextMilestone major etaDays etaDate dateKey stale debut -_id';
 const EVENT_FIELDS = 'type spotifyId kind value major dateKey date name image artistSpotifyId artistName -_id';
 
 const first = (v) => (Array.isArray(v) ? v[0] : v);

@@ -10,7 +10,8 @@
     "smoke": "node scripts/smoke.js",
     "cron:run": "node scripts/run-cron.js",
     "fixtures:refresh": "node test/fixtures/refresh.js",
-    "insights:run": "node scripts/run-insights.js"
+    "insights:run": "node scripts/run-insights.js",
+    "releases:run": "node scripts/run-releases.js"
   },
   "author": "",
   "license": "ISC",
