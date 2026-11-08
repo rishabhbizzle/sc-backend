@@ -26,6 +26,11 @@ const songSchema = new mongoose.Schema({
         type: Object,
         default: {},
     },
+    // Spotify release_date as given: "YYYY-MM-DD", or "YYYY"/"YYYY-MM" for
+    // older releases with coarser precision
+    releaseDate: {
+        type: String,
+    },
     isrc: {
         type: String,
     },

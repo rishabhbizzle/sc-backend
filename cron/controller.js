@@ -8,6 +8,8 @@ const Song = require('../models/songModel');
 const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
 const kworb = require('../scrapers/kworb');
+const insights = require('../services/insights');
+const { parseKey } = require('../utilities/streams');
 const { positiveIntEnv, nonNegativeIntEnv } = require('../utilities/semaphore');
 
 // Daily kworb -> MongoDB sync for the priority artists.
@@ -28,7 +30,9 @@ const SCHEDULE = process.env.CRON_SCHEDULE || '22 02 * * *';
 const TIMEZONE = process.env.CRON_TIMEZONE || 'Asia/Kolkata';
 const ARTIST_DELAY_MS = nonNegativeIntEnv(process.env.CRON_ARTIST_DELAY_MS, 10000);
 const ARTIST_ATTEMPTS = positiveIntEnv(process.env.CRON_ARTIST_ATTEMPTS, 3);
-const METADATA_BACKFILL_PER_ARTIST = 25;
+// Existing docs missing metadata (e.g. releaseDate, added later) get filled a
+// few per artist per run, most-streamed first.
+const METADATA_BACKFILL_PER_ARTIST = positiveIntEnv(process.env.CRON_METADATA_BACKFILL, 25);
 // Gap between consecutive Spotify metadata lookups (one per NEW song/album), so a
 // brand-new artist with 500 songs never bursts into Spotify's rate limit.
 const SPOTIFY_PACING_MS = nonNegativeIntEnv(process.env.CRON_SPOTIFY_PACING_MS, 120);
@@ -64,6 +68,7 @@ const defaultDeps = {
     getTrack: (id) => safeSpotify(`tracks.get(${id})`, (s) => s.tracks.get(id)),
     getAlbum: (id) => safeSpotify(`albums.get(${id})`, (s) => s.albums.get(id)),
     getArtist: (id) => safeSpotify(`artists.get(${id})`, (s) => s.artists.get(id)),
+    computeInsights: (opts) => insights.computeInsights(opts),
 };
 
 // --- helpers ---------------------------------------------------------------
@@ -100,6 +105,13 @@ function toInt(text) {
 function firstImage(meta) {
     const images = meta && (meta.images || (meta.album && meta.album.images));
     return Array.isArray(images) && images.length > 0 ? images[0].url : null;
+}
+
+// Spotify's album.release_date: "YYYY-MM-DD", or "YYYY" / "YYYY-MM" for old
+// releases. Anything else is ignored rather than stored.
+function releaseDateOf(album) {
+    const value = album && album.release_date;
+    return typeof value === 'string' && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(value) ? value : null;
 }
 
 // --- writers ---------------------------------------------------------------
@@ -210,10 +222,11 @@ function upsertSongs(artistId, songs, dateKey, deps) {
     return upsertCollection({
         Model: Song, artistId, rows: songs, dateKey, label: 'song',
         fetchMeta: deps.getTrack,
-        metaFields: ['isrc', 'image'],
+        metaFields: ['isrc', 'image', 'releaseDate'],
         buildMeta: (meta) => ({
             isrc: meta && meta.external_ids && meta.external_ids.isrc ? meta.external_ids.isrc : null,
             image: firstImage(meta),
+            releaseDate: releaseDateOf(meta && meta.album),
         }),
     });
 }
@@ -222,8 +235,8 @@ function upsertAlbums(artistId, albums, dateKey, deps) {
     return upsertCollection({
         Model: Album, artistId, rows: albums, dateKey, label: 'album',
         fetchMeta: deps.getAlbum,
-        metaFields: ['image'],
-        buildMeta: (meta) => ({ image: firstImage(meta) }),
+        metaFields: ['image', 'releaseDate'],
+        buildMeta: (meta) => ({ image: firstImage(meta), releaseDate: releaseDateOf(meta) }),
     });
 }
 
@@ -272,6 +285,8 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
     state.running = true;
     const startedAt = new Date();
     const results = [];
+    let okKeys = [];
+    let insightsResult = null;
     console.log(`[cron] ====== DAILY UPDATE STARTED ${startedAt.toISOString()} ======`);
     try {
         const artists = Array.isArray(artistIds) && artistIds.length
@@ -282,6 +297,20 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
             results.push(result);
             console.log(`[cron] ${index + 1}/${artists.length} ${artist.spotifyId}: ${result.ok ? `ok (key ${result.dateKey}, songs ${result.songs.updated}+${result.songs.created}, albums ${result.albums.skipped ? 'skipped' : `${result.albums.updated}+${result.albums.created}`})` : `FAILED: ${result.error}`}`);
             if (index < artists.length - 1 && delayMs > 0) await sleep(delayMs);
+        }
+        // Rebuild the precomputed snapshots (milestones, ETAs, events) for the
+        // newest day written. A failure here is logged and never fails the run.
+        okKeys = [...new Set(results.filter((r) => r.ok).map((r) => r.dateKey))];
+        const newestKey = [...okKeys].sort((a, b) => parseKey(a) - parseKey(b)).pop();
+        const compute = deps.computeInsights === undefined ? defaultDeps.computeInsights : deps.computeInsights;
+        if (newestKey && typeof compute === 'function') {
+            try {
+                insightsResult = await compute({ asOfKey: newestKey });
+                console.log(`[cron] insights for ${newestKey}: ${JSON.stringify(insightsResult)}`);
+            } catch (error) {
+                insightsResult = { ok: false, error: error && error.message };
+                console.error('[cron] insights failed:', error);
+            }
         }
     } catch (error) {
         state.lastError = { at: new Date().toISOString(), message: error && error.message };
@@ -297,7 +326,8 @@ async function runDailyUpdate({ artistIds, delayMs = ARTIST_DELAY_MS, deps = def
         artists: results.length,
         ok: results.filter((r) => r.ok).length,
         failed: results.filter((r) => !r.ok).map((r) => ({ artistId: r.artistId, error: r.error })),
-        dateKeys: [...new Set(results.filter((r) => r.ok).map((r) => r.dateKey))],
+        dateKeys: okKeys,
+        insights: insightsResult,
     };
     state.lastRun = summary;
     console.log(`[cron] ====== DAILY UPDATE DONE: ${summary.ok}/${summary.artists} artists ok in ${Math.round(summary.durationMs / 1000)}s ======`);
