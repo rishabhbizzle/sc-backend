@@ -9,7 +9,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "smoke": "node scripts/smoke.js",
     "cron:run": "node scripts/run-cron.js",
-    "fixtures:refresh": "node test/fixtures/refresh.js"
+    "fixtures:refresh": "node test/fixtures/refresh.js",
+    "insights:run": "node scripts/run-insights.js"
   },
   "author": "",
   "license": "ISC",

@@ -16,6 +16,7 @@ const httpClient = require('./utilities/http');
 const { positiveIntEnv } = require('./utilities/semaphore');
 const cronController = require('./cron/controller');
 const { WikipediaLayoutError } = require('./scrapers/wikipedia');
+const milestones = require('./services/milestones');
 const { Redis } = require("ioredis");
 const { createClerkClient } = require('@clerk/clerk-sdk-node');
 const {
@@ -195,6 +196,9 @@ const sendError = (res, error) => {
         console.warn('Upstream unavailable:', message);
         return sendJson(res, 503, { status: 'error', message: 'Upstream data source is temporarily unavailable, please retry shortly', detail: message });
     }
+    if (name === 'BadRequestError') {
+        return sendJson(res, 400, { status: 'error', message });
+    }
     if (error instanceof WikipediaLayoutError) {
         console.error('Wikipedia layout changed:', message);
         return sendJson(res, 502, { status: 'error', message: 'Records source layout changed; this list needs a parser update', detail: message });
@@ -251,6 +255,45 @@ cachedJsonRoute('/api/v1/songs/top', { heavy: false, key: (r) => `songs-top-${q(
 cachedJsonRoute('/api/v1/songs/viral', { heavy: false, key: (r) => `songs-viral-${q(r.query.limit, 50)}`, ttl: ONE_HOUR, fetch: (r) => getTopViralTracks(q(r.query.limit, undefined)) });
 cachedJsonRoute('/api/v1/charts/lastFmTopTracks', { heavy: false, key: (r) => `lastfm-top-${q(r.query.page, 1)}-${q(r.query.limit, 10)}`, ttl: ONE_HOUR, fetch: (r) => getLastFmTopTracks(q(r.query.page, undefined), q(r.query.limit, undefined)) });
 cachedJsonRoute('/api/v1/charts/qqMusic', { heavy: false, key: (r) => `qq-top-${q(r.query.limit, 100)}`, ttl: ONE_HOUR, fetch: (r) => getQQMusicTopTracks(q(r.query.limit, undefined)) });
+
+// ---------------------------------------------------------------------------
+// Milestones / insights. Read precomputed snapshots (services/insights.js,
+// rebuilt after each daily cron run), so these are cheap Mongo reads. Params
+// are validated before the cache key is built, so junk never gets cached.
+// ---------------------------------------------------------------------------
+const insightRoute = (path, { parse, key, fetch, notFound = false }) => {
+    app.get(path, async (req, res) => {
+        try {
+            const input = parse(req);
+            const data = await withCache(key(input), ONE_HOUR, () => fetch(input));
+            if (notFound && data == null) return sendJson(res, 404, { status: 'error', message: 'Not found' });
+            return sendJson(res, 200, { status: 'success', data });
+        } catch (error) {
+            return sendError(res, error);
+        }
+    });
+};
+insightRoute('/api/v1/milestones/upcoming', {
+    parse: (r) => milestones.parseUpcoming(r.query),
+    key: (p) => `ms-upcoming-${p.type}-${p.within}-${p.limit}-${p.major ? 1 : 0}`,
+    fetch: (p) => milestones.upcoming(p),
+});
+insightRoute('/api/v1/milestones/club', {
+    parse: (r) => milestones.parseClub(r.query),
+    key: (p) => `ms-club-${p.type}-${p.milestone}-${p.limit}`,
+    fetch: (p) => milestones.club(p),
+});
+insightRoute('/api/v1/milestones/recent', {
+    parse: (r) => milestones.parseRecent(r.query),
+    key: (p) => `ms-recent-${p.type || 'all'}-${p.days}-${p.limit}-${p.major ? 1 : 0}`,
+    fetch: (p) => milestones.recent(p),
+});
+insightRoute('/api/v1/insights/:type/:id', {
+    parse: (r) => milestones.parseInsight(r.params),
+    key: (p) => `insight-${p.type}-${p.id}`,
+    fetch: (p) => milestones.getInsight(p),
+    notFound: true,
+});
 
 // Liveness + a quick look at the moving parts (pool/queue sizes, cron state).
 app.get('/api/v1/health', (req, res) => {

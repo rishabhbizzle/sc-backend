@@ -10,6 +10,8 @@ const Song = require('../models/songModel');
 const Album = require('../models/albumModel');
 const Artist = require('../models/artistModel');
 const PriorityArtist = require('../models/priorityArtists');
+const Insight = require('../models/insightModel');
+const StreamEvent = require('../models/streamEventModel');
 const { fixture, sleep } = require('./helpers');
 
 const TS = '06HL4z0CvFAxyc27GXpf02';
@@ -30,8 +32,8 @@ function makeDeps({ lastUpdated = '2026-10-06', failSongsFetches = 0, notFound =
             return { ...kworb.parseArtistSongsPage(songsHtml), lastUpdated, notFound: false };
         },
         fetchAlbumsPage: async () => ({ ...kworb.parseArtistAlbumsPage(albumsHtml), notFound: false }),
-        getTrack: async (id) => { calls.getTrack++; return { external_ids: { isrc: `ISRC-${id}` }, album: { images: [{ url: `img-${id}` }] } }; },
-        getAlbum: async (id) => { calls.getAlbum++; return { images: [{ url: `aimg-${id}` }] }; },
+        getTrack: async (id) => { calls.getTrack++; return { external_ids: { isrc: `ISRC-${id}` }, album: { images: [{ url: `img-${id}` }], release_date: '2019-08-23' } }; },
+        getAlbum: async (id) => { calls.getAlbum++; return { images: [{ url: `aimg-${id}` }], release_date: '2019-08' }; },
         getArtist: async () => { calls.getArtist++; return { name: 'Taylor Swift', followers: { total: 123 }, popularity: 98, genres: ['pop'], images: [{ url: 'artist-img' }] }; },
     };
 }
@@ -46,7 +48,7 @@ test.after(async () => {
     await mongod.stop();
 });
 test.beforeEach(async () => {
-    await Promise.all([Song.deleteMany({}), Album.deleteMany({}), Artist.deleteMany({}), PriorityArtist.deleteMany({})]);
+    await Promise.all([Song.deleteMany({}), Album.deleteMany({}), Artist.deleteMany({}), PriorityArtist.deleteMany({}), Insight.deleteMany({}), StreamEvent.deleteMany({})]);
 });
 
 test('dateKeyFor: kworb date minus one day, wall clock minus two as fallback', () => {
@@ -85,12 +87,14 @@ test('first run creates the artist, its songs and albums under the kworb-derived
     assert.equal(song.artistSpotifyId, TS);
     assert.equal(song.isrc, `ISRC-${first.id}`);
     assert.equal(song.image, `img-${first.id}`);
+    assert.equal(song.releaseDate, '2019-08-23');
     assert.equal(song.totalStreams, cron.toInt(first.total));
     assert.deepEqual(song.dailyStreams, { '05-10-2026': cron.toInt(first.daily) });
 
     const album = await Album.findOne({ spotifyId: parsedAlbums.albums[0].id }).lean();
     assert.equal(album.title, parsedAlbums.albums[0].title);
     assert.equal(album.image, `aimg-${parsedAlbums.albums[0].id}`);
+    assert.equal(album.releaseDate, '2019-08', 'coarse Spotify precision is kept as given');
     assert.equal(await Song.countDocuments(), 30);
     assert.equal(await Album.countDocuments(), 30);
 });
@@ -166,4 +170,46 @@ test('runDailyUpdate walks the priority list, reports a summary, and skips overl
     assert.equal(cron.status().running, false);
     assert.equal(cron.status().lastRun.ok, 1);
     assert.equal(await Song.countDocuments(), 30);
+});
+
+test('existing docs without a releaseDate get it backfilled; junk release dates are not stored', async () => {
+    const [a, b] = parsedSongs.songs;
+    await Song.create({ spotifyId: a.id, title: a.title, isrc: 'X', image: 'i', dailyStreams: {} });
+    await Song.create({ spotifyId: b.id, title: b.title, isrc: 'Y', image: 'j', dailyStreams: {} });
+    const deps = makeDeps();
+    const realGetTrack = deps.getTrack;
+    deps.getTrack = async (id) => (id === b.id ? { ...(await realGetTrack(id)), album: { release_date: 'soon' } } : realGetTrack(id));
+    const r = await cron.processArtist(TS, deps);
+    assert.equal(r.songs.backfilled, 2);
+    assert.equal((await Song.findOne({ spotifyId: a.id }).lean()).releaseDate, '2019-08-23');
+    const junk = await Song.findOne({ spotifyId: b.id }).lean();
+    assert.equal(junk.releaseDate, undefined);
+    assert.equal(junk.isrc, `ISRC-${b.id}`, 'other fields from the same lookup still land');
+});
+
+test('runDailyUpdate rebuilds insights for the newest day and reports them; an insights failure never fails the run', async () => {
+    await PriorityArtist.create({ spotifyId: TS, cmId: '2762' });
+    await cron.runDailyUpdate({ delayMs: 0, deps: makeDeps({ lastUpdated: '2026-10-06' }) });
+    const { summary } = await cron.runDailyUpdate({ delayMs: 0, deps: makeDeps({ lastUpdated: '2026-10-07' }) });
+    assert.deepEqual(summary.dateKeys, ['06-10-2026']);
+    assert.equal(summary.insights.ok, true);
+    assert.equal(summary.insights.asOfKey, '06-10-2026');
+    assert.equal(summary.insights.song.snapshots, 30);
+    assert.equal(summary.insights.album.snapshots, 30);
+    assert.equal(summary.insights.artist.snapshots, 1);
+    const first = parsedSongs.songs[0];
+    const snap = await Insight.findOne({ type: 'song', spotifyId: first.id }).lean();
+    assert.equal(snap.total, cron.toInt(first.total));
+    assert.equal(snap.daily, cron.toInt(first.daily));
+    assert.equal(snap.dateKey, '06-10-2026');
+    assert.equal(snap.artistName, 'Taylor Swift');
+    assert.equal(snap.releaseDate, '2019-08-23');
+    assert.equal(snap.stale, false);
+
+    const deps = makeDeps({ lastUpdated: '2026-10-08' });
+    deps.computeInsights = async () => { throw new Error('insights boom'); };
+    const failed = await cron.runDailyUpdate({ delayMs: 0, deps });
+    assert.equal(failed.summary.ok, 1, 'the artist data still counts as written');
+    assert.deepEqual(failed.summary.insights, { ok: false, error: 'insights boom' });
+    assert.equal(cron.status().running, false);
 });

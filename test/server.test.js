@@ -371,6 +371,54 @@ test('review routes require a Clerk token', async () => {
     assert.equal((await json('/api/v1/reviews/000000000000000000000000', { method: 'DELETE' })).status, 401);
 });
 
+test('milestone and insight routes serve the precomputed snapshots; bad params are 400, unknown ids 404', async () => {
+    // seed the same database the server reads, then run the real insights pass
+    const mongoose = require('mongoose');
+    const Artist = require('../models/artistModel');
+    const Song = require('../models/songModel');
+    const { computeInsights } = require('../services/insights');
+    const days = (vals) => Object.fromEntries(vals.map((v, i) => [`${String(i + 1).padStart(2, '0')}-11-2026`, v]));
+    await mongoose.connect(mongod.getUri(), { dbName: 'prod' });
+    try {
+        const ART = 'ARTISTMILESTONE0000000';
+        const SONG = 'SONGMILESTONE000000000';
+        await Artist.create({ spotifyId: ART, name: 'Taylor Swift', totalStreams: 5, dailyTotalStreams: days([1, 1, 1]) });
+        await Song.create({ spotifyId: SONG, title: 'Cruel Summer', artistSpotifyId: ART, totalStreams: 2_990_000_000, dailyStreams: days([5e6, 5e6, 5e6]) });
+        const result = await computeInsights();
+        assert.equal(result.asOfKey, '03-11-2026');
+    } finally {
+        await mongoose.disconnect();
+    }
+
+    const up = await data('/api/v1/milestones/upcoming?type=song');
+    assert.equal(up.length, 1);
+    assert.deepEqual({ name: up[0].name, nextMilestone: up[0].nextMilestone, etaDays: up[0].etaDays, major: up[0].major, artistName: up[0].artistName }, { name: 'Cruel Summer', nextMilestone: 3e9, etaDays: 2, major: true, artistName: 'Taylor Swift' });
+    assert.equal(up[0].prevTotal, undefined);
+    const club = await data('/api/v1/milestones/club?type=song&milestone=4000000000');
+    assert.equal(club[0].clubEtaDays, 202);
+    assert.deepEqual(await data('/api/v1/milestones/recent'), []);
+    const one = await data('/api/v1/insights/song/SONGMILESTONE000000000');
+    assert.equal(one.total, 2_990_000_000);
+    assert.equal(one.dateKey, '03-11-2026');
+
+    const missing = await json('/api/v1/insights/album/SONGMILESTONE000000000');
+    assert.equal(missing.status, 404);
+    for (const p of [
+        '/api/v1/milestones/upcoming',
+        '/api/v1/milestones/upcoming?type=podcast',
+        '/api/v1/milestones/upcoming?type=song&limit=1000',
+        '/api/v1/milestones/club?type=song&milestone=123',
+        '/api/v1/milestones/recent?days=99',
+        '/api/v1/insights/song/not-an-id',
+        '/api/v1/insights/user/SONGMILESTONE000000000',
+    ]) {
+        const r = await json(p);
+        assert.equal(r.status, 400, `${p} -> ${r.status}`);
+        assert.equal(r.body.status, 'error');
+        assert.ok(r.body.message && !/stack|at \//.test(r.body.message), 'plain validation message');
+    }
+});
+
 test('spotify-backed routes answer with a JSON error (not a hang) when Spotify rejects the credentials', async () => {
     for (const p of ['/api/v1/songs/top?limit=5', '/api/v1/others/new-releases?limit=5', '/api/v1/songs/viral']) {
         const t0 = Date.now();
