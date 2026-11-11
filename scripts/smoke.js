@@ -40,7 +40,9 @@ const routes = [
     { path: '/api/v1/search?type=artist&text=taylor', expect: 'object' },
     { path: '/api/v1/others/getRecomendations?type=artist', expect: 'array' },
     { path: `/api/v1/reviews?targetId=${TS}`, expect: 'any' },
-    { path: '/api/v1/user/favourites/smoke-test-user', expect: 'object' },
+    // user routes need a Clerk token: without one they must refuse, not serve data
+    { path: '/api/v1/user/favourites', expect: 'any', status: 401 },
+    { path: '/api/v1/user/dashboard', expect: 'any', status: 401 },
 ];
 
 function describe(payload) {
@@ -64,7 +66,7 @@ function describe(payload) {
             let payload;
             try { payload = JSON.parse(text); } catch (_) { payload = null; }
             const shape = payload ? describe(payload) : { kind: 'non-json', text: text.slice(0, 60) };
-            const statusOk = res.status === 200;
+            const statusOk = res.status === (route.status || 200);
             const shapeOk = route.expect === 'any' || (shape.kind === route.expect && !shape.empty);
             ok = statusOk && shapeOk;
             line = `${ok ? 'PASS' : 'FAIL'} ${String(res.status).padEnd(3)} ${String(ms + 'ms').padStart(8)}  ${route.path.padEnd(62)} ${shape.text}${payload && payload.message ? '  msg=' + payload.message : ''}`;
